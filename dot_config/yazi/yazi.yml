@@ -1,0 +1,23 @@
+# ~/.config/yazi/yazi.yml
+preview:
+  text: bat
+  pdf: pdftotext
+  video: ffmpegthumbnailer
+  audio: exiftool
+
+manager:
+  sort_by: name
+  show_hidden: true
+  git_status: true
+
+plugin:
+  enable: true
+
+keymap:
+  normal:
+    g: shell("git status")
+    s: shell("git add {file}")
+    S: shell("git add .")
+    c: shell("git commit")
+    p: shell("git push")
+    d: shell("git diff {file}")

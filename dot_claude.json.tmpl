@@ -1,0 +1,43 @@
+{
+  "autoUpdates": true,
+  "theme": "dark-daltonized",
+  "autoConnectIde": true,
+  "fileCheckpointingEnabled": false,
+  "respectGitignore": false,
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
+    }{{ if .secrets.firecrawl_api_key }},
+    "firecrawl": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "firecrawl-mcp"
+      ],
+      "env": {
+        "FIRECRAWL_API_KEY": "{{ .secrets.firecrawl_api_key }}"
+      }
+    }{{ end }}{{ if .secrets.github_mcp_token }},
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp",
+      "headers": {
+        "Authorization": "Bearer {{ .secrets.github_mcp_token }}"
+      }
+    }{{ end }},
+    "lerian": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@lerianstudio/lerian-mcp-server"
+      ],
+      "env": {}
+    }
+  },
+  "bypassPermissionsModeAccepted": true
+}

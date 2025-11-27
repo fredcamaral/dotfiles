@@ -1,0 +1,20 @@
+{{ if .secrets.openrouter_api_key -}}
+OCO_API_KEY={{ .secrets.openrouter_api_key }}
+{{ else -}}
+OCO_API_KEY=
+{{ end -}}
+OCO_MODEL=google/gemini-2.5-pro
+OCO_API_URL=undefined
+OCO_AI_PROVIDER=openrouter
+OCO_TOKENS_MAX_INPUT=1000000
+OCO_TOKENS_MAX_OUTPUT=64000
+OCO_DESCRIPTION=false
+OCO_EMOJI=false
+OCO_LANGUAGE=en
+OCO_MESSAGE_TEMPLATE_PLACEHOLDER=$msg
+OCO_PROMPT_MODULE=conventional-commit
+OCO_ONE_LINE_COMMIT=false
+OCO_TEST_MOCK_TYPE=commit-message
+OCO_OMIT_SCOPE=false
+OCO_GITPUSH=true
+OCO_WHY=false

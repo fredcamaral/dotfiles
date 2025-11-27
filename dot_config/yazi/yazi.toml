@@ -1,0 +1,16 @@
+[mgr]
+show_hidden = true
+sort_by = "alphabetical"
+sort_sensitive = false
+sort_reverse = false
+linemode = "size"
+preview = true
+preview_max_width = 80
+preview_max_height = 40
+preview_images = true
+preview_scripts = true
+preview_mime = true
+preview_extract = true
+preview_cache = true
+preview_cache_dir = "~/.cache/yazi/previews"
+preview_git = true

@@ -1,0 +1,110 @@
+GOOSE_LEAD_MODEL: anthropic/claude-opus-4.1
+GOOSE_PROVIDER: openrouter
+extensions:
+  developer:
+    enabled: true
+    type: builtin
+    name: developer
+    display_name: Developer Tools
+    description: null
+    timeout: 6000
+    bundled: true
+    available_tools: []
+  goosedocs:
+    enabled: true
+    type: stdio
+    name: goosedocs
+    cmd: npx
+    args:
+    - mcp-remote
+    - https://block.gitmcp.io/goose/
+    envs: {}
+    env_keys: []
+    timeout: 300
+    description: GitMCP for Goose documentation
+    bundled: null
+    available_tools: []
+  repomix:
+    enabled: true
+    type: stdio
+    name: repomix
+    cmd: npx
+    args:
+    - -y
+    - repomix-mcp
+    envs: {}
+    env_keys: []
+    timeout: 300
+    description: Repository analysis and code organization
+    bundled: null
+    available_tools: []
+  autovisualiser:
+    enabled: true
+    type: builtin
+    name: autovisualiser
+    display_name: Auto Visualiser
+    description: null
+    timeout: 300
+    bundled: true
+    available_tools: []
+  oracle:
+    enabled: true
+    type: stdio
+    name: oracle
+    cmd: /Users/fredamaral/Repos/lerianstudio/oracle-mcp-server/.oracle_venv/bin/python
+    args:
+    - /Users/fredamaral/Repos/lerianstudio/oracle-mcp-server/server.py
+    envs: {}
+    env_keys:
+    - OPENAI_API_KEY
+    - OPENROUTER_API_KEY
+    timeout: 300
+    description: Oracle Thinking MCP
+    bundled: null
+    available_tools: []
+  memory:
+    enabled: true
+    type: builtin
+    name: memory
+    display_name: Memory
+    description: null
+    timeout: 300
+    bundled: true
+    available_tools: []
+  computercontroller:
+    enabled: true
+    type: builtin
+    name: computercontroller
+    display_name: Computer Controller
+    description: null
+    timeout: 6000
+    bundled: true
+    available_tools: []
+  tutorial:
+    enabled: false
+    type: builtin
+    name: tutorial
+    display_name: Tutorial
+    description: null
+    timeout: 300
+    bundled: true
+    available_tools: []
+  context7:
+    enabled: true
+    type: stdio
+    name: context7
+    cmd: npx
+    args:
+    - -y
+    - '@upstash/context7-mcp'
+    envs: {}
+    env_keys: []
+    timeout: 300
+    description: Use up-to-date code and docs
+    bundled: null
+    available_tools: []
+GOOSE_LEAD_PROVIDER: openrouter
+GOOSE_ENABLE_ROUTER: 'true'
+GOOSE_MODEL: anthropic/claude-sonnet-4.5
+GOOSE_MAX_TURNS: 100000
+GOOSE_MODE: auto

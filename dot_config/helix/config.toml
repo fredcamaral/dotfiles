@@ -1,0 +1,56 @@
+theme = "catppuccin_mocha"            # pick any
+[editor]
+line-number = "relative"
+cursorline = true
+cursorcolumn = false
+bufferline = "always"                 # visible buffers like tabs
+rulers = [100, 120]
+color-modes = true
+indent-guides.render = true
+lsp.display-inlay-hints = true
+lsp.display-messages = true
+auto-save = false
+auto-format = true
+completion-trigger-len = 1
+idle-timeout = 150
+
+[editor.statusline]
+left = ["mode", "spinner", "file-name", "read-only-indicator", "file-modification-indicator"]
+center = ["diagnostics"]
+right = ["selections", "position", "file-encoding", "file-line-ending", "file-type"]
+
+[keys.normal]
+"space f" = ":file_picker"            # like <leader> f f
+"space F" = ":file_picker_in_current_directory"
+"space b" = ":buffer_picker"          # switch buffers
+"space s" = ":symbol_picker"          # workspace symbols
+"space /" = ":global_search"          # ripgrep project
+"space d" = ":diagnostics_picker"
+"space g b" = ":vcs_blame"
+"space g l" = ":vcs_log"
+"space r n" = ":lsp_rename"
+"space c a" = ":code_action"
+"space h"   = ":hover"
+"space ."   = ":command_palette"
+# vim-like
+"h" = "move_char_left"
+"j" = "move_line_down"
+"k" = "move_line_up"
+"l" = "move_char_right"
+# arrows
+"left"  = "move_char_left"
+"down"  = "move_line_down"
+"up"    = "move_line_up"
+"right" = "move_char_right"
+
+[keys.select]
+# vim-like
+"h" = "move_char_left"
+"j" = "move_line_down"
+"k" = "move_line_up"
+"l" = "move_char_right"
+# arrows
+"left"  = "move_char_left"
+"down"  = "move_line_down"
+"up"    = "move_line_up"
+"right" = "move_char_right"

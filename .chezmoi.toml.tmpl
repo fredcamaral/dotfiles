@@ -1,0 +1,20 @@
+# chezmoi configuration
+# This template prompts for secrets on `chezmoi init`
+
+[data]
+    email = "{{ promptStringOnce . "email" "Email address" }}"
+    name = "{{ promptStringOnce . "name" "Full name" }}"
+
+[data.secrets]
+    # Claude Code / MCP secrets
+    firecrawl_api_key = "{{ promptStringOnce . "secrets.firecrawl_api_key" "Firecrawl API Key (or leave empty)" }}"
+    github_mcp_token = "{{ promptStringOnce . "secrets.github_mcp_token" "GitHub MCP Token (or leave empty)" }}"
+    
+    # OpenCommit / OpenRouter
+    openrouter_api_key = "{{ promptStringOnce . "secrets.openrouter_api_key" "OpenRouter API Key (or leave empty)" }}"
+    
+    # Raycast
+    raycast_token = "{{ promptStringOnce . "secrets.raycast_token" "Raycast Token (or leave empty)" }}"
+    
+    # Intellimmit (OpenAI)
+    intellimmit_openai_key = "{{ promptStringOnce . "secrets.intellimmit_openai_key" "Intellimmit OpenAI Key - encrypted value (or leave empty)" }}"

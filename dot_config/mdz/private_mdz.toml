@@ -1,0 +1,6 @@
+Token = 'mock-token'
+ClientID = 'test'
+ClientSecret = 'test'
+URLAPIAuth = 'http://localhost:8080'
+URLAPILedger = 'http://localhost:8081'
+Version = ''

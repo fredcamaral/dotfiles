@@ -1,0 +1,288 @@
+#!/bin/zsh
+
+# ================================================================
+# ZSH CONFIGURATION
+# ================================================================
+
+# Cache brew prefix for faster startup (avoid repeated subshell calls)
+BREW_PREFIX=$(brew --prefix)
+
+# Completions
+fpath=(/Users/fredamaral/.docker/completions $fpath)
+fpath=(~/.zsh/completion $fpath)
+
+autoload -Uz compinit
+# Speed up completions with caching (rebuild if .zcompdump older than 24h)
+if [[ -n ~/.zcompdump(#qN.mh+24) ]]; then
+  compinit
+else
+  compinit -C
+fi
+
+# Advanced completion settings
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
+zstyle ':completion:*' menu select
+zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
+
+# History Configuration
+HISTFILE=~/.zsh_history
+HISTSIZE=100000
+SAVEHIST=100000
+setopt EXTENDED_HISTORY      # Add timestamps to history (view with: fc -li 1)
+setopt HIST_IGNORE_ALL_DUPS  # Don't save duplicates
+setopt HIST_FIND_NO_DUPS     # Don't show duplicates in search
+setopt HIST_SAVE_NO_DUPS     # Don't write duplicates
+setopt HIST_IGNORE_SPACE     # Commands starting with space aren't saved
+setopt SHARE_HISTORY         # Share history across terminals
+setopt APPEND_HISTORY        # Append, don't overwrite
+setopt INC_APPEND_HISTORY    # Write immediately, not on exit
+
+# Better Directory Navigation
+setopt AUTO_CD              # Type dir name to cd
+setopt AUTO_PUSHD           # Make cd push to directory stack
+setopt PUSHD_IGNORE_DUPS    # Don't push duplicates
+setopt PUSHD_SILENT         # Don't print stack after pushd/popd
+
+# Extended Globbing
+setopt EXTENDED_GLOB        # Use ^ ~ # for patterns (e.g., ls ^*.go)
+setopt NULL_GLOB            # Don't error on no glob matches
+
+# ================================================================
+# ENVIRONMENT VARIABLES
+# ================================================================
+
+# Development Paths
+export GOPATH=$HOME/go
+export GPG_TTY=$(tty)
+
+# AI/Claude Configuration
+export CLAUDE_CODE_MAX_OUTPUT_TOKENS=250000
+export SUPERPOWERS_SKILLS_ROOT="~/.config/superpowers/"
+
+# External Services
+export COMPOSE_BAKE=true
+export OLLAMA_API_BASE=http://21.26.7.4:11434
+
+export _ZO_DOCTOR=0
+export GPG_TTY=$(tty)
+
+# Load sensitive environment variables from secure location
+[[ -f ~/.config/envvars/api_keys.env ]] && source ~/.config/envvars/api_keys.env
+
+# ================================================================
+# PATH CONFIGURATION
+# ================================================================
+
+# Prevent PATH duplication on reload
+typeset -U PATH path
+
+# Prepend paths (first in PATH)
+export PATH="/Users/fredamaral/.codeium/windsurf/bin:$PATH"
+export PATH="$BREW_PREFIX/opt/openssl/bin:$PATH"
+
+# Append paths (last in PATH)
+export PATH="$PATH:$GOPATH/bin"
+export PATH="$PATH:/Users/fredamaral/.lmstudio/bin"
+export PATH="$PATH:/Users/fredamaral/.cargo/bin"
+export PATH="$PATH:$HOME/.local/bin"
+export PATH="$PATH:$HOME/Library/Python/3.9/bin"
+
+# Local binaries environment
+. "$HOME/.local/bin/env"
+
+# ================================================================
+# ALIASES
+# ================================================================
+
+# System Shortcuts
+alias c="clear"
+alias zshconfig="micro ~/.zshrc"
+
+# Directory Navigation
+alias ..="cd .."
+alias ...="cd ../.."
+alias ....="cd ../../.."
+alias .....="cd ../../../.."
+alias d='dirs -v'           # Show directory stack
+alias 1='cd -1'             # Jump to recent dirs
+alias 2='cd -2'
+alias 3='cd -3'
+
+# File Operations
+alias ls="eza --icons=always --group-directories-first"
+alias l="eza --icons=always --group-directories-first -l --git --header"
+alias ll="eza --icons=always --group-directories-first -l --git --header --git-ignore"
+alias la="eza --icons=always --group-directories-first -l --git --header -a"
+alias lt="eza --icons=always --tree --level=2 --group-directories-first"
+alias lta="eza --icons=always --tree --level=2 --group-directories-first -a"
+alias ltl="eza --icons=always --tree --level=3 --group-directories-first"
+alias lsize="eza --icons=always --group-directories-first -l --sort=size --reverse"
+alias ltime="eza --icons=always --group-directories-first -l --sort=modified --reverse"
+alias ldirs="eza --icons=always --group-directories-first -l -D"
+alias lfiles="eza --icons=always --group-directories-first -l -f"
+alias tree="eza --icons --tree --group-directories-first"
+alias dsize="du -hs"
+alias space="ncdu"
+
+# Development Tools
+alias py="python"
+alias python3="python@3.13"
+alias pip3="python@3.13 -m pip"
+alias lg="lazygit"
+alias ld="lazydocker"
+alias zj="zellij"
+alias cl="CLAUDE_CODE_MAX_OUTPUT_TOKENS=250000 claude --dangerously-skip-permissions"
+alias cx="codex --dangerously-bypass-approvals-and-sandbox"
+alias cx-fred="/Users/fredamaral/Repos/codex/codex-rs/target/debug/codex --dangerously-bypass-approvals-and-sandbox"
+
+# Git Shortcuts
+alias gac="git add . && git commit -m 'updating...'"
+alias gcai="mkdir docs && cd docs && git clone https://github.com/lerianstudio/ai-prompts"
+alias gs="git status -sb"
+alias gd="git diff"
+alias gp="git push"
+alias gl="git pull"
+alias gco="git checkout"
+alias gcb="git checkout -b"
+alias glog="git log --oneline --graph --decorate --all"
+alias gunstage="git restore --staged"
+alias gundo="git reset --soft HEAD~1"
+
+# SSH Connections
+alias geraldo="ssh fredamaral@21.26.7.4"
+alias firmino="ssh root@21.26.7.2"
+
+# Docker Operations
+alias dockerpurge="docker system prune -f --volumes && docker builder prune -f"
+alias dockerpurgeall="docker system prune -af --volumes && docker builder prune -af"
+
+# System Shortcuts
+alias reload="source ~/.zshrc"
+alias myip="curl -s ifconfig.me"
+alias ports="lsof -i -P | grep LISTEN"
+alias cleanup="brew cleanup && docker system prune -af"
+
+# ================================================================
+# FUNCTIONS
+# ================================================================
+
+# mkdir + cd combined
+mkcd() { mkdir -p "$1" && cd "$1" }
+
+# Quick file backup with timestamp
+bak() { cp "$1" "$1.bak.$(date +%Y%m%d_%H%M%S)" }
+
+# Universal archive extraction
+extract() {
+  if [[ ! -f "$1" ]]; then
+    echo "extract: '$1' is not a file"
+    return 1
+  fi
+  case "$1" in
+    *.tar.bz2) tar xjf "$1" ;;
+    *.tar.gz)  tar xzf "$1" ;;
+    *.tar.xz)  tar xJf "$1" ;;
+    *.tar.zst) tar --zstd -xf "$1" ;;
+    *.bz2)     bunzip2 "$1" ;;
+    *.gz)      gunzip "$1" ;;
+    *.tar)     tar xf "$1" ;;
+    *.tbz2)    tar xjf "$1" ;;
+    *.tgz)     tar xzf "$1" ;;
+    *.zip)     unzip "$1" ;;
+    *.Z)       uncompress "$1" ;;
+    *.7z)      7z x "$1" ;;
+    *.rar)     unrar x "$1" ;;
+    *)         echo "extract: unknown format '$1'" ;;
+  esac
+}
+
+# Interactive git branch checkout with fzf
+fbr() {
+  local branch=$(git branch -a --color=always | grep -v HEAD |
+    fzf --ansi --preview 'git log --oneline --graph --color=always $(echo {} | sed "s/.*\///"| xargs) -- | head -20' |
+    sed 's/.*remotes\/origin\///' | xargs)
+  [[ -n "$branch" ]] && git checkout "$branch"
+}
+
+# Interactive git log browser with fzf
+flog() {
+  git log --oneline --graph --decorate --all --color=always |
+    fzf --ansi --no-sort --reverse --preview 'git show --color=always $(echo {} | grep -o "[a-f0-9]\{7,\}" | head -1)' |
+    grep -o "[a-f0-9]\{7,\}" | head -1 | xargs git show
+}
+
+# ================================================================
+# EXTERNAL INTEGRATIONS
+# ================================================================
+
+# iTerm2 Shell Integration
+test -e "${HOME}/.iterm2_shell_integration.zsh" && source "${HOME}/.iterm2_shell_integration.zsh"
+
+# Kiro Terminal Integration
+[[ "$TERM_PROGRAM" == "kiro" ]] && . "$(kiro --locate-shell-integration-path zsh)"
+
+# Bun completions
+[ -s "/Users/fredamaral/.bun/_bun" ] && source "/Users/fredamaral/.bun/_bun"
+
+# ZSH Auto-suggestions (install: brew install zsh-autosuggestions)
+if [[ -f $BREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]]; then
+  source $BREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+fi
+
+# ZSH Syntax Highlighting (install: brew install zsh-syntax-highlighting)
+if [[ -f $BREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]]; then
+  source $BREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+fi
+
+# FZF Integration (install: brew install fzf)
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+export FZF_DEFAULT_OPTS='--height 40% --layout=reverse --border'
+
+# Zoxide (install: brew install zoxide)
+if command -v zoxide &> /dev/null; then
+  eval "$(zoxide init zsh)"
+  alias cd="z"
+fi
+
+# Key Bindings
+# Ctrl+Left/Right to jump words
+bindkey "^[[1;5C" forward-word
+bindkey "^[[1;5D" backward-word
+
+# History search with up/down
+autoload -U up-line-or-beginning-search
+autoload -U down-line-or-beginning-search
+zle -N up-line-or-beginning-search
+zle -N down-line-or-beginning-search
+bindkey "^[[A" up-line-or-beginning-search
+bindkey "^[[B" down-line-or-beginning-search
+
+# Ctrl+Z toggle: suspend with Ctrl+Z, resume with Ctrl+Z again
+ctrl-z-toggle() {
+  if [[ $#BUFFER -eq 0 ]]; then
+    BUFFER="fg"
+    zle accept-line
+  else
+    zle push-input
+    zle clear-screen
+  fi
+}
+zle -N ctrl-z-toggle
+bindkey '^Z' ctrl-z-toggle
+
+# ================================================================
+# DIRECTORY BOOKMARKS
+# ================================================================
+# Use as: cd ~repos, ls ~config, etc.
+hash -d repos=~/Repos
+hash -d config=~/.config
+hash -d claude=~/.claude
+
+# Starship Prompt
+eval "$(starship init zsh)"
+
+# Added by Antigravity
+export PATH="/Users/fredamaral/.antigravity/antigravity/bin:$PATH"
+
+# opencode
+export PATH=/Users/fredamaral/.opencode/bin:$PATH

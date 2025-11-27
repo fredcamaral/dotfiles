@@ -1,0 +1,33 @@
+[server]
+  host = "localhost"
+  port = 1000
+  read_timeout = 30
+  write_timeout = 30
+  shutdown_timeout = 5
+
+[theme]
+  name = "default"
+  custom_path = ""
+
+[browser]
+  auto_open = true
+  browser = "default"
+
+[watcher]
+  interval_ms = 200
+  debounce_ms = 500
+  max_retries = 3
+  retry_delay_ms = 100
+
+[plugins]
+  enabled = true
+  directory = ""
+  whitelist = []
+  blacklist = []
+
+[metadata]
+  author = ""
+  email = ""
+  company = ""
+  default_tags = []
+  [metadata.custom]

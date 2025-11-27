@@ -1,0 +1,123 @@
+chunking:
+    chunk_timeout: 15s
+    enabled: true
+    max_chunk_size: 4096
+    semantic_parsing: true
+    total_timeout: 30s
+default_provider: openai
+git:
+    auto_push_prompt: false
+    auto_stage: false
+    exclude_patterns:
+        - '*.lock'
+        - '*-lock.*'
+        - '*.generated.*'
+        - vendor/*
+        - node_modules/*
+        - '*.min.js'
+        - '*.min.css'
+        - '*.log'
+        - '*.tmp'
+        - .env*
+logging:
+    enabled: true
+    file_path: ""
+    format: json
+    level: info
+    max_files: 5
+    max_size_mb: 50
+output:
+    emoji: false
+    format: conventional
+    include_body: true
+    include_footer: true
+    language: en
+    message_style: conventional
+providers:
+    anthropic:
+        api_key: ""
+        base_url: https://api.anthropic.com/v1
+        custom_prompt: ""
+        features:
+            streaming: false
+        max_retries: 3
+        max_tokens: 4096
+        model: claude-3-haiku-20240307
+        temperature: 0.7
+        timeout: 30s
+        top_p: 1
+    gemini:
+        api_key: ""
+        base_url: ""
+        custom_prompt: ""
+        features:
+            safety: true
+            streaming: false
+        max_retries: 3
+        max_tokens: 4096
+        model: gemini-1.5-flash
+        temperature: 0.7
+        timeout: 30s
+        top_p: 1
+    lm_studio:
+        api_key: ""
+        base_url: http://localhost:1234/v1
+        custom_prompt: ""
+        features:
+            streaming: false
+        max_retries: 1
+        max_tokens: 4096
+        model: local-model
+        temperature: 0.7
+        timeout: 60s
+        top_p: 1
+    ollama:
+        api_key: ""
+        base_url: http://localhost:11434/v1
+        custom_prompt: ""
+        features:
+            streaming: false
+        max_retries: 1
+        max_tokens: 4096
+        model: llama3
+        temperature: 0.7
+        timeout: 60s
+        top_p: 1
+    openai:
+        api_key: {{ if .secrets.intellimmit_openai_key }}{{ .secrets.intellimmit_openai_key }}{{ else }}""{{ end }}
+        base_url: https://api.openai.com/v1
+        custom_prompt: ""
+        features:
+            function_call: false
+            json_mode: false
+            streaming: false
+        frequency_penalty: 0
+        max_retries: 3
+        max_tokens: 50000
+        model: gpt-4o
+        organization: ""
+        presence_penalty: 0
+        temperature: 0.7
+        timeout: 30s
+        top_p: 1
+    openrouter:
+        api_key: ""
+        base_url: https://openrouter.ai/api/v1
+        custom_prompt: ""
+        features:
+            streaming: false
+        headers:
+            http-referer: https://github.com/fredcamaral/intellimmit
+            x-title: intellimmit
+        max_retries: 3
+        max_tokens: 4096
+        model: anthropic/claude-3-haiku
+        temperature: 0.7
+        timeout: 30s
+        top_p: 1
+version: "1.0"
+why_mode:
+    analyze_comments: true
+    analyze_imports: true
+    context_lines: 10
+    enabled: false

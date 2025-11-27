@@ -1,0 +1,9 @@
+[mgr]
+prepend_keymap = [
+  { on = "g", run = "shell git status", desc = "Show Git status" },
+  { on = "s", run = "shell git add {file}", desc = "Stage current file" },
+  { on = "S", run = "shell git add .", desc = "Stage all changes" },
+  { on = "c", run = "shell git commit", desc = "Commit changes" },
+  { on = "p", run = "shell git push", desc = "Push to remote" },
+  { on = "d", run = "shell git diff {file}", desc = "Diff current file" }
+]
