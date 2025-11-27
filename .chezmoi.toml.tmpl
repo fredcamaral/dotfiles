@@ -1,20 +1,17 @@
-# chezmoi configuration
-# This template prompts for secrets on `chezmoi init`
+# chezmoi configuration with 1Password integration
+# Secrets are automatically fetched from the "Dotfiles" vault
+
+[onepassword]
+    # Prompt for 1Password authentication if needed
+    prompt = true
 
 [data]
-    email = "{{ promptStringOnce . "email" "Email address" }}"
-    name = "{{ promptStringOnce . "name" "Full name" }}"
+    email = "fred@fredamaral.com.br"
+    name = "Fred Amaral"
 
 [data.secrets]
-    # Claude Code / MCP secrets
-    firecrawl_api_key = "{{ promptStringOnce . "secrets.firecrawl_api_key" "Firecrawl API Key (or leave empty)" }}"
-    github_mcp_token = "{{ promptStringOnce . "secrets.github_mcp_token" "GitHub MCP Token (or leave empty)" }}"
-    
-    # OpenCommit / OpenRouter
-    openrouter_api_key = "{{ promptStringOnce . "secrets.openrouter_api_key" "OpenRouter API Key (or leave empty)" }}"
-    
-    # Raycast
-    raycast_token = "{{ promptStringOnce . "secrets.raycast_token" "Raycast Token (or leave empty)" }}"
-    
-    # Intellimmit (OpenAI)
-    intellimmit_openai_key = "{{ promptStringOnce . "secrets.intellimmit_openai_key" "Intellimmit OpenAI Key - encrypted value (or leave empty)" }}"
+    firecrawl_api_key = {{ onepasswordRead "op://Dotfiles/Firecrawl/credential" | quote }}
+    github_mcp_token = {{ onepasswordRead "op://Dotfiles/GitHub MCP Token/credential" | quote }}
+    openrouter_api_key = {{ onepasswordRead "op://Dotfiles/OpenRouter/credential" | quote }}
+    raycast_token = {{ onepasswordRead "op://Dotfiles/Raycast/credential" | quote }}
+    intellimmit_openai_key = {{ onepasswordRead "op://Dotfiles/Intellimmit OpenAI/credential" | quote }}

@@ -36,24 +36,40 @@ chezmoi init --apply fredcamaral
 
 ## Secrets Management
 
-This repo uses chezmoi templates to handle secrets. On first run, you'll be prompted for:
+This repo uses **1Password** for automatic secret injection. Secrets are stored in a dedicated `Dotfiles` vault and fetched automatically during `chezmoi init`.
 
-- Firecrawl API Key (for Claude MCP)
-- GitHub MCP Token
-- OpenRouter API Key (for OpenCommit)
-- Raycast Token
-- Intellimmit OpenAI Key
+### Prerequisites
 
-Secrets are stored locally in `~/.config/chezmoi/chezmoi.toml` and never committed.
+1. Install 1Password CLI: `brew install --cask 1password-cli`
+2. Enable CLI integration in 1Password app settings
+3. Sign in: `op signin`
+
+### Secrets Stored in 1Password (Dotfiles vault)
+
+| Item | Used By |
+|------|---------|
+| Firecrawl | Claude MCP integration |
+| GitHub MCP Token | GitHub Copilot MCP |
+| OpenRouter | OpenCommit |
+| Raycast | Raycast launcher |
+| Intellimmit OpenAI | AI commit tool |
+
+### How It Works
+
+On `chezmoi init`, secrets are automatically fetched from 1Password:
+
+```toml
+# .chezmoi.toml.tmpl
+firecrawl_api_key = {{ onepasswordRead "op://Dotfiles/Firecrawl/credential" }}
+```
 
 ### Updating Secrets
 
-```bash
-# Re-run init to update secrets
-chezmoi init
+Update the value in 1Password, then re-run:
 
-# Or edit directly
-chezmoi edit-config
+```bash
+chezmoi init
+chezmoi apply
 ```
 
 ## Manual Steps After Install
@@ -85,6 +101,7 @@ chezmoi add ~/.zshrc
 - macOS (tested on Sonoma/Sequoia)
 - Homebrew
 - Git
+- 1Password with CLI enabled
 
 ### Recommended Tools (install via brew)
 
