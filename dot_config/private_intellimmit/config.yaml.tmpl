@@ -84,7 +84,7 @@ providers:
         timeout: 60s
         top_p: 1
     openai:
-        api_key: {{ if .secrets.intellimmit_openai_key }}{{ .secrets.intellimmit_openai_key }}{{ else }}""{{ end }}
+        api_key: {{ onepasswordRead "op://Dotfiles/Intellimmit OpenAI/credential" }}
         base_url: https://api.openai.com/v1
         custom_prompt: ""
         features:

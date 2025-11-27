@@ -1,17 +1,9 @@
-# chezmoi configuration with 1Password integration
-# Secrets are automatically fetched from the "Dotfiles" vault
+# chezmoi configuration
+# Secrets are fetched directly from 1Password "Dotfiles" vault
 
 [onepassword]
-    # Prompt for 1Password authentication if needed
     prompt = true
 
 [data]
     email = "fred@fredamaral.com.br"
     name = "Fred Amaral"
-
-[data.secrets]
-    firecrawl_api_key = {{ onepasswordRead "op://Dotfiles/Firecrawl/credential" | quote }}
-    github_mcp_token = {{ onepasswordRead "op://Dotfiles/GitHub MCP Token/credential" | quote }}
-    openrouter_api_key = {{ onepasswordRead "op://Dotfiles/OpenRouter/credential" | quote }}
-    raycast_token = {{ onepasswordRead "op://Dotfiles/Raycast/credential" | quote }}
-    intellimmit_openai_key = {{ onepasswordRead "op://Dotfiles/Intellimmit OpenAI/credential" | quote }}

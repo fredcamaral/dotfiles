@@ -32,7 +32,10 @@ A macOS-focused development environment configuration featuring:
     ├── karabiner/            # Keyboard remapping (caps lock → hyper)
     ├── gh/                   # GitHub CLI
     ├── git/ignore            # Global gitignore
-    └── goose/config.yaml     # Goose AI assistant
+    ├── goose/config.yaml     # Goose AI assistant
+    ├── envvars/api_keys.env  # Environment variables (API keys)
+    ├── raycast/              # Raycast launcher
+    └── intellimmit/          # AI commit tool config
 ```
 
 ## Quick Start
@@ -71,9 +74,11 @@ Secrets are stored in a dedicated 1Password vault called `Dotfiles` and injected
 |--------|---------|
 | Firecrawl | Web scraping for Claude MCP |
 | GitHub MCP Token | GitHub Copilot MCP integration |
-| OpenRouter | AI provider for OpenCommit |
+| OpenAI | OpenAI API (env vars) |
+| OpenRouter-Env | OpenRouter API (env vars) |
+| OpenRouter-OpenCommit | OpenRouter API (OpenCommit) |
 | Raycast | Raycast launcher token |
-| Intellimmit OpenAI | AI commit tool |
+| Intellimmit OpenAI | AI commit tool (encrypted key) |
 
 **No secrets are stored in this repository.**
 

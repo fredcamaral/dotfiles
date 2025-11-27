@@ -1,4 +1,4 @@
 {
-  "accesstoken" : "{{ .secrets.raycast_token }}",
-  "token" : "{{ .secrets.raycast_token }}"
+  "accesstoken" : "{{ onepasswordRead "op://Dotfiles/Raycast/credential" }}",
+  "token" : "{{ onepasswordRead "op://Dotfiles/Raycast/credential" }}"
 }

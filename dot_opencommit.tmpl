@@ -1,8 +1,4 @@
-{{ if .secrets.openrouter_api_key -}}
-OCO_API_KEY={{ .secrets.openrouter_api_key }}
-{{ else -}}
-OCO_API_KEY=
-{{ end -}}
+OCO_API_KEY={{ onepasswordRead "op://Dotfiles/OpenRouter-OpenCommit/credential" }}
 OCO_MODEL=google/gemini-2.5-pro
 OCO_API_URL=undefined
 OCO_AI_PROVIDER=openrouter
