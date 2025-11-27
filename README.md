@@ -40,7 +40,21 @@ A macOS-focused development environment configuration featuring:
 
 ## Quick Start
 
-### For Me (on a new machine)
+### One Command Setup (for me)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fredcamaral/dotfiles/main/scripts/bootstrap.sh | bash
+```
+
+This script will:
+1. Install Homebrew (if needed)
+2. Install 1Password CLI and prompt for sign-in
+3. Install all required tools (zsh, tmux, neovim, starship, etc.)
+4. Install chezmoi and apply dotfiles with secrets from 1Password
+5. Configure zsh as default shell
+6. Install tmux plugin manager
+
+### Manual Setup
 
 ```bash
 # Prerequisites: 1Password CLI installed and signed in
