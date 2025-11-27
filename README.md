@@ -7,9 +7,10 @@ Personal dotfiles managed with [chezmoi](https://www.chezmoi.io/), with secrets 
 A macOS-focused development environment configuration featuring:
 
 - Modern terminal setup (zsh + starship + tmux/zellij)
-- Neovim with NvChad
+- Neovim with NvChad (15 LSP servers, treesitter)
 - AI-powered development tools (Claude, Goose, OpenCommit)
-- Sensible defaults and keybindings
+- Centralized secrets management via 1Password
+- Catppuccin Mocha theme across all tools
 
 ## What's Included
 
@@ -17,23 +18,23 @@ A macOS-focused development environment configuration featuring:
 ~
 ├── .zshrc                    # Shell config with aliases, functions, history
 ├── .tmux.conf                # Terminal multiplexer (catppuccin theme)
-├── .gitconfig                # Git configuration
+├── .gitconfig                # Git configuration (templated for portability)
 ├── .opencommit               # AI commit message generator
 ├── .claude.json              # Claude Code MCP servers config
 ├── .claude/CLAUDE.md         # Claude Code instructions
 │
 └── .config/
-    ├── starship.toml         # Cross-shell prompt
+    ├── envvars/api_keys.env  # CENTRALIZED API keys (single source of truth)
+    ├── starship.toml         # Cross-shell prompt (catppuccin mocha)
     ├── ghostty/config        # Terminal emulator
-    ├── zellij/config.kdl     # Modern terminal multiplexer
-    ├── nvim/                 # Neovim (NvChad-based)
+    ├── zellij/config.kdl     # Modern terminal multiplexer (catppuccin)
+    ├── nvim/                 # Neovim (NvChad + LSP + Treesitter)
     ├── helix/config.toml     # Helix editor
-    ├── yazi/                 # Terminal file manager
+    ├── yazi/                 # Terminal file manager (v0.4+ config)
     ├── karabiner/            # Keyboard remapping (caps lock → hyper)
     ├── gh/                   # GitHub CLI
     ├── git/ignore            # Global gitignore
     ├── goose/config.yaml     # Goose AI assistant
-    ├── envvars/api_keys.env  # Environment variables (API keys)
     ├── raycast/              # Raycast launcher
     └── intellimmit/          # AI commit tool config
 ```
@@ -74,25 +75,29 @@ Feel free to fork and adapt! You'll need to:
 
 ```toml
 # Change from:
-firecrawl_api_key = {{ onepasswordRead "op://Dotfiles/Firecrawl/credential" | quote }}
+export OPENAI_API_KEY="{{ onepasswordRead "op://Dotfiles/OpenAI/credential" }}"
 
 # To prompted input:
-firecrawl_api_key = {{ promptStringOnce . "secrets.firecrawl_api_key" "Firecrawl API Key" | quote }}
+export OPENAI_API_KEY="{{ promptStringOnce . "secrets.openai" "OpenAI API Key" }}"
 ```
 
 ## Secrets Management
 
-Secrets are stored in a dedicated 1Password vault called `Dotfiles` and injected automatically during `chezmoi init`.
+All secrets are **centralized** in `~/.config/envvars/api_keys.env`, sourced by `.zshrc`.
 
-| Secret | Purpose |
-|--------|---------|
-| Firecrawl | Web scraping for Claude MCP |
-| GitHub MCP Token | GitHub Copilot MCP integration |
-| OpenAI | OpenAI API (env vars) |
-| OpenRouter-Env | OpenRouter API (env vars) |
-| OpenRouter-OpenCommit | OpenRouter API (OpenCommit) |
-| Raycast | Raycast launcher token |
-| Intellimmit OpenAI | AI commit tool (encrypted key) |
+Secrets are stored in a dedicated 1Password vault called `Dotfiles`:
+
+| Secret | Environment Variable | Purpose |
+|--------|---------------------|---------|
+| OpenAI | `OPENAI_API_KEY` | OpenAI API |
+| OpenRouter-Env | `OPENROUTER_API_KEY` | OpenRouter API |
+| OpenRouter-OpenCommit | `OCO_API_KEY` | OpenCommit tool |
+| Firecrawl | `FIRECRAWL_API_KEY` | Web scraping |
+| GitHub MCP Token | `GITHUB_MCP_TOKEN` | GitHub Copilot MCP |
+| Contentful | `CONTENTFUL_SPACE_ID`, `CONTENTFUL_ACCESS_TOKEN`, `CONTENTFUL_PREVIEW_TOKEN` | Contentful CMS |
+| PostHog Public | `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` | Analytics |
+| PostHog Personal | `POSTHOG_PERSONAL_KEY` | PostHog admin |
+| Raycast | *(config file)* | Raycast launcher |
 
 **No secrets are stored in this repository.**
 
@@ -118,6 +123,15 @@ source ~/.zshrc
 - **Git shortcuts**: `gs`, `gp`, `gl`, `glog`, `fbr` (fuzzy branch checkout)
 - **Modern replacements**: `eza` for ls, `bat` for cat, `rg` for grep
 
+### Neovim
+
+- Based on [NvChad](https://nvchad.com/) v2.5
+- **LSP servers**: gopls, ts_ls, lua_ls, pyright, rust_analyzer, yamlls, jsonls, bashls, dockerls, html, cssls, tailwindcss + more
+- **Treesitter**: 20+ languages (go, typescript, lua, markdown, yaml, dockerfile, etc.)
+- **Format on save**: Enabled via conform.nvim
+- Theme: ayu_dark
+- Leader: `Space`
+
 ### Tmux
 
 - **Prefix**: `Ctrl+a` (easier than default `Ctrl+b`)
@@ -125,11 +139,17 @@ source ~/.zshrc
 - **Navigation**: `Alt+arrows` between panes (no prefix needed)
 - **Persistence**: Auto-save/restore sessions with continuum
 
-### Neovim
+### Zellij
 
-- Based on [NvChad](https://nvchad.com/) v2.5
-- Theme: ayu_dark
-- Leader: `Space`
+- **Theme**: Catppuccin Mocha
+- **Default mode**: Locked (press `Ctrl+g` to unlock)
+- **Session persistence**: Auto-attach to existing session
+
+### Yazi (File Manager)
+
+- v0.4+ compatible configuration
+- Git integration keybindings (`g+s` status, `g+a` add, `g+c` commit)
+- Catppuccin Mocha theme
 
 ### Keyboard (Karabiner)
 
@@ -145,7 +165,7 @@ source ~/.zshrc
 
 ```bash
 brew install \
-  zsh tmux neovim \
+  zsh tmux neovim helix \
   starship zellij ghostty \
   yazi eza bat fd ripgrep fzf \
   zoxide lazygit gh
@@ -171,6 +191,20 @@ chezmoi diff                    # Preview changes
 chezmoi apply                   # Apply changes
 chezmoi cd                      # Go to source directory
 git add -A && git commit && git push
+```
+
+## Adding New Secrets
+
+```bash
+# Add to 1Password
+op item create --category=login --title="Service Name" --vault="Dotfiles" 'credential=your-api-key'
+
+# Add to api_keys.env.tmpl
+export SERVICE_API_KEY="{{ onepasswordRead "op://Dotfiles/Service Name/credential" }}"
+
+# Re-apply
+chezmoi apply
+source ~/.zshrc
 ```
 
 ## License
