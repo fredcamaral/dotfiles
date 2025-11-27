@@ -4,7 +4,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/fredcamaral/dotfiles/main/scripts/bootstrap.sh | bash
 #
 
-set -e
+set -euo pipefail
 
 # Colors
 RED='\033[0;31m'

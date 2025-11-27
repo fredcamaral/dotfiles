@@ -1,9 +1,15 @@
+# Yazi keymap configuration - compatible with v0.4+
+# Schema: https://yazi-rs.github.io/schemas/keymap.json
+"$schema" = "https://yazi-rs.github.io/schemas/keymap.json"
+
 [mgr]
 prepend_keymap = [
-  { on = "g", run = "shell git status", desc = "Show Git status" },
-  { on = "s", run = "shell git add {file}", desc = "Stage current file" },
-  { on = "S", run = "shell git add .", desc = "Stage all changes" },
-  { on = "c", run = "shell git commit", desc = "Commit changes" },
-  { on = "p", run = "shell git push", desc = "Push to remote" },
-  { on = "d", run = "shell git diff {file}", desc = "Diff current file" }
+  # Git integration
+  { on = ["g", "s"], run = "shell 'git status' --block", desc = "Git status" },
+  { on = ["g", "a"], run = "shell 'git add -- \"$@\"' --block", desc = "Git add selected" },
+  { on = ["g", "A"], run = "shell 'git add .' --block", desc = "Git add all" },
+  { on = ["g", "c"], run = "shell 'git commit' --block", desc = "Git commit" },
+  { on = ["g", "p"], run = "shell 'git push' --block", desc = "Git push" },
+  { on = ["g", "d"], run = "shell 'git diff -- \"$@\"' --block", desc = "Git diff selected" },
+  { on = ["g", "l"], run = "shell 'git log --oneline -20' --block", desc = "Git log" },
 ]

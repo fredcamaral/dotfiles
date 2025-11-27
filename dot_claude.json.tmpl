@@ -7,20 +7,11 @@
   "mcpServers": {
     "context7": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ]
+      "args": ["-y", "@upstash/context7-mcp"]
     },
     "firecrawl": {
       "command": "npx",
-      "args": [
-        "-y",
-        "firecrawl-mcp"
-      ],
-      "env": {
-        "FIRECRAWL_API_KEY": "{{ onepasswordRead "op://Dotfiles/Firecrawl/credential" }}"
-      }
+      "args": ["-y", "firecrawl-mcp"]
     },
     "github": {
       "type": "http",
@@ -30,13 +21,8 @@
       }
     },
     "lerian": {
-      "type": "stdio",
       "command": "npx",
-      "args": [
-        "-y",
-        "@lerianstudio/lerian-mcp-server"
-      ],
-      "env": {}
+      "args": ["-y", "@lerianstudio/lerian-mcp-server"]
     }
   },
   "bypassPermissionsModeAccepted": true

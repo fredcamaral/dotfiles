@@ -1,4 +1,4 @@
-OCO_API_KEY={{ onepasswordRead "op://Dotfiles/OpenRouter-OpenCommit/credential" }}
+# OCO_API_KEY is set via ~/.config/envvars/api_keys.env
 OCO_MODEL=google/gemini-2.5-pro
 OCO_API_URL=undefined
 OCO_AI_PROVIDER=openrouter

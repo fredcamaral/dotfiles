@@ -1,0 +1,33 @@
+[init]
+	defaultBranch = main
+[user]
+	name = {{ .chezmoi.username | title }} Amaral
+	email = {{ .email | default "fred@fredamaral.com.br" }}
+{{- if .gpg_signing_key }}
+	signingkey = {{ .gpg_signing_key }}
+{{- end }}
+[commit]
+{{- if .gpg_signing_key }}
+	gpgsign = true
+{{- else }}
+	gpgsign = false
+{{- end }}
+[tag]
+{{- if .gpg_signing_key }}
+	gpgSign = true
+{{- else }}
+	gpgSign = false
+{{- end }}
+[core]
+	editor = nvim
+	pager = less
+[pull]
+	rebase = true
+[push]
+	autoSetupRemote = true
+[alias]
+	st = status
+	co = checkout
+	br = branch
+	ci = commit
+	lg = log --oneline --graph --decorate

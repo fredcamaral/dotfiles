@@ -47,21 +47,23 @@ extensions:
     timeout: 300
     bundled: true
     available_tools: []
-  oracle:
-    enabled: true
-    type: stdio
-    name: oracle
-    cmd: /Users/fredamaral/Repos/lerianstudio/oracle-mcp-server/.oracle_venv/bin/python
-    args:
-    - /Users/fredamaral/Repos/lerianstudio/oracle-mcp-server/server.py
-    envs: {}
-    env_keys:
-    - OPENAI_API_KEY
-    - OPENROUTER_API_KEY
-    timeout: 300
-    description: Oracle Thinking MCP
-    bundled: null
-    available_tools: []
+  # Oracle MCP disabled - requires local installation
+  # To enable: clone oracle-mcp-server, setup venv, update paths below
+  # oracle:
+  #   enabled: true
+  #   type: stdio
+  #   name: oracle
+  #   cmd: "${HOME}/Repos/lerianstudio/oracle-mcp-server/.oracle_venv/bin/python"
+  #   args:
+  #   - "${HOME}/Repos/lerianstudio/oracle-mcp-server/server.py"
+  #   envs: {}
+  #   env_keys:
+  #   - OPENAI_API_KEY
+  #   - OPENROUTER_API_KEY
+  #   timeout: 300
+  #   description: Oracle Thinking MCP
+  #   bundled: null
+  #   available_tools: []
   memory:
     enabled: true
     type: builtin

@@ -1,16 +1,119 @@
-[ui]
-background = "#1e1e2e"
-foreground = "#cdd6f4"
-highlight = "#89b4fa"
-cursor = "#f38ba8"
-selection = "#313244"
-statusline = "#45475a"
+# Yazi theme configuration - Catppuccin Mocha
+# Schema: https://yazi-rs.github.io/schemas/theme.json
+"$schema" = "https://yazi-rs.github.io/schemas/theme.json"
 
-[syntax]
-comment = "#6c7086"
-constant = "#fab387"
-identifier = "#f9e2af"
-statement = "#cba6f7"
-type = "#94e2d5"
-special = "#f38ba8"
-underlined = "#a6e3a1"
+# For a full Catppuccin theme, consider using the official flavor:
+# https://github.com/yazi-rs/flavors/tree/main/catppuccin-mocha.yazi
+#
+# To use it, create: ~/.config/yazi/flavors/catppuccin-mocha.yazi/
+# and add to yazi.toml: [flavor] use = "catppuccin-mocha"
+
+[mgr]
+cwd = { fg = "#94e2d5" }
+hovered = { fg = "#1e1e2e", bg = "#89b4fa" }
+preview_hovered = { underline = true }
+find_keyword = { fg = "#f9e2af", bold = true, italic = true, underline = true }
+find_position = { fg = "#f38ba8", bg = "reset", bold = true, italic = true }
+marker_copied = { fg = "#a6e3a1", bg = "#a6e3a1" }
+marker_cut = { fg = "#f38ba8", bg = "#f38ba8" }
+marker_marked = { fg = "#89b4fa", bg = "#89b4fa" }
+marker_selected = { fg = "#f9e2af", bg = "#f9e2af" }
+tab_active = { fg = "#1e1e2e", bg = "#cdd6f4" }
+tab_inactive = { fg = "#cdd6f4", bg = "#45475a" }
+tab_width = 1
+count_copied = { fg = "#1e1e2e", bg = "#a6e3a1" }
+count_cut = { fg = "#1e1e2e", bg = "#f38ba8" }
+count_selected = { fg = "#1e1e2e", bg = "#f9e2af" }
+border_symbol = "│"
+border_style = { fg = "#6c7086" }
+
+[status]
+separator_open = ""
+separator_close = ""
+separator_style = { fg = "#45475a", bg = "#45475a" }
+mode_normal = { fg = "#1e1e2e", bg = "#89b4fa", bold = true }
+mode_select = { fg = "#1e1e2e", bg = "#a6e3a1", bold = true }
+mode_unset = { fg = "#1e1e2e", bg = "#f38ba8", bold = true }
+progress_label = { fg = "#cdd6f4", bold = true }
+progress_normal = { fg = "#89b4fa", bg = "#45475a" }
+progress_error = { fg = "#f38ba8", bg = "#45475a" }
+perm_type = { fg = "#89b4fa" }
+perm_read = { fg = "#f9e2af" }
+perm_write = { fg = "#f38ba8" }
+perm_exec = { fg = "#a6e3a1" }
+perm_sep = { fg = "#6c7086" }
+
+[input]
+border = { fg = "#89b4fa" }
+title = {}
+value = {}
+selected = { reversed = true }
+
+[pick]
+border = { fg = "#89b4fa" }
+active = { fg = "#f38ba8", bold = true }
+inactive = {}
+
+[confirm]
+border = { fg = "#89b4fa" }
+title = { fg = "#89b4fa" }
+content = {}
+list = {}
+btn_yes = { bg = "#a6e3a1" }
+btn_no = { bg = "#f38ba8" }
+btn_labels = true
+
+[completion]
+border = { fg = "#89b4fa" }
+active = { fg = "#f38ba8", bold = true }
+inactive = {}
+icon_file = ""
+icon_folder = ""
+icon_command = ""
+
+[tasks]
+border = { fg = "#89b4fa" }
+title = {}
+hovered = { fg = "#f38ba8", underline = true }
+
+[which]
+cols = 3
+mask = { bg = "#313244" }
+cand = { fg = "#94e2d5" }
+rest = { fg = "#6c7086" }
+desc = { fg = "#f38ba8" }
+separator = "  "
+separator_style = { fg = "#585b70" }
+
+[help]
+on = { fg = "#94e2d5" }
+run = { fg = "#f38ba8" }
+desc = {}
+hovered = { reversed = true, bold = true }
+footer = { fg = "#45475a", bg = "#cdd6f4" }
+
+[notify]
+title_info = { fg = "#a6e3a1" }
+title_warn = { fg = "#f9e2af" }
+title_error = { fg = "#f38ba8" }
+icon_info = ""
+icon_warn = ""
+icon_error = ""
+
+[filetype]
+rules = [
+  # Media
+  { mime = "image/*", fg = "#94e2d5" },
+  { mime = "{audio,video}/*", fg = "#f9e2af" },
+
+  # Archives
+  { mime = "application/{zip,rar,7z*,tar,gzip,xz,bzip*}", fg = "#f38ba8" },
+
+  # Documents
+  { mime = "application/pdf", fg = "#f38ba8" },
+  { mime = "application/{msword,vnd.*}", fg = "#89b4fa" },
+
+  # Fallback
+  { name = "*", fg = "#cdd6f4" },
+  { name = "*/", fg = "#89b4fa" },
+]

@@ -84,7 +84,8 @@ providers:
         timeout: 60s
         top_p: 1
     openai:
-        api_key: {{ onepasswordRead "op://Dotfiles/Intellimmit OpenAI/credential" }}
+        # Uses OPENAI_API_KEY from ~/.config/envvars/api_keys.env
+        api_key: ""
         base_url: https://api.openai.com/v1
         custom_prompt: ""
         features:
