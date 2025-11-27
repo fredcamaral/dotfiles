@@ -1,128 +1,166 @@
-# Fred's Dotfiles
+# Dotfiles
 
-Personal dotfiles managed with [chezmoi](https://www.chezmoi.io/).
+Personal dotfiles managed with [chezmoi](https://www.chezmoi.io/), with secrets handled via [1Password](https://1password.com/).
 
-## Quick Install
+## Overview
 
-```bash
-# Install chezmoi and apply dotfiles
-sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply fredcamaral
+A macOS-focused development environment configuration featuring:
 
-# Or if you already have chezmoi:
-chezmoi init --apply fredcamaral
-```
+- Modern terminal setup (zsh + starship + tmux/zellij)
+- Neovim with NvChad
+- AI-powered development tools (Claude, Goose, OpenCommit)
+- Sensible defaults and keybindings
 
 ## What's Included
 
-### Shell & Terminal
-- **zsh** - Shell configuration with aliases, functions, and completions
-- **tmux** - Terminal multiplexer with catppuccin theme
-- **starship** - Cross-shell prompt
-- **zellij** - Modern terminal multiplexer
-- **ghostty** - Terminal emulator config
+```
+~
+├── .zshrc                    # Shell config with aliases, functions, history
+├── .tmux.conf                # Terminal multiplexer (catppuccin theme)
+├── .gitconfig                # Git configuration
+├── .opencommit               # AI commit message generator
+├── .claude.json              # Claude Code MCP servers config
+├── .claude/CLAUDE.md         # Claude Code instructions
+│
+└── .config/
+    ├── starship.toml         # Cross-shell prompt
+    ├── ghostty/config        # Terminal emulator
+    ├── zellij/config.kdl     # Modern terminal multiplexer
+    ├── nvim/                 # Neovim (NvChad-based)
+    ├── helix/config.toml     # Helix editor
+    ├── yazi/                 # Terminal file manager
+    ├── karabiner/            # Keyboard remapping (caps lock → hyper)
+    ├── gh/                   # GitHub CLI
+    ├── git/ignore            # Global gitignore
+    └── goose/config.yaml     # Goose AI assistant
+```
 
-### Editors
-- **neovim** - NvChad-based configuration
-- **helix** - Modal editor config
+## Quick Start
 
-### Developer Tools
-- **git** - Global gitconfig and ignore patterns
-- **gh** - GitHub CLI configuration
-- **goose** - AI assistant config
-- **yazi** - Terminal file manager
+### For Me (on a new machine)
 
-### Other
-- **karabiner** - Keyboard remapping (caps lock -> hyper key)
+```bash
+# Prerequisites: 1Password CLI installed and signed in
+brew install --cask 1password-cli
+op signin
+
+# Install dotfiles - secrets auto-injected from 1Password
+sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply fredcamaral
+```
+
+### For Others
+
+Feel free to fork and adapt! You'll need to:
+
+1. Remove/modify the 1Password integration in `.chezmoi.toml.tmpl`
+2. Either use your own password manager or switch to manual prompts:
+
+```toml
+# Change from:
+firecrawl_api_key = {{ onepasswordRead "op://Dotfiles/Firecrawl/credential" | quote }}
+
+# To prompted input:
+firecrawl_api_key = {{ promptStringOnce . "secrets.firecrawl_api_key" "Firecrawl API Key" | quote }}
+```
 
 ## Secrets Management
 
-This repo uses **1Password** for automatic secret injection. Secrets are stored in a dedicated `Dotfiles` vault and fetched automatically during `chezmoi init`.
+Secrets are stored in a dedicated 1Password vault called `Dotfiles` and injected automatically during `chezmoi init`.
 
-### Prerequisites
-
-1. Install 1Password CLI: `brew install --cask 1password-cli`
-2. Enable CLI integration in 1Password app settings
-3. Sign in: `op signin`
-
-### Secrets Stored in 1Password (Dotfiles vault)
-
-| Item | Used By |
-|------|---------|
-| Firecrawl | Claude MCP integration |
-| GitHub MCP Token | GitHub Copilot MCP |
-| OpenRouter | OpenCommit |
-| Raycast | Raycast launcher |
+| Secret | Purpose |
+|--------|---------|
+| Firecrawl | Web scraping for Claude MCP |
+| GitHub MCP Token | GitHub Copilot MCP integration |
+| OpenRouter | AI provider for OpenCommit |
+| Raycast | Raycast launcher token |
 | Intellimmit OpenAI | AI commit tool |
 
-### How It Works
+**No secrets are stored in this repository.**
 
-On `chezmoi init`, secrets are automatically fetched from 1Password:
-
-```toml
-# .chezmoi.toml.tmpl
-firecrawl_api_key = {{ onepasswordRead "op://Dotfiles/Firecrawl/credential" }}
-```
-
-### Updating Secrets
-
-Update the value in 1Password, then re-run:
+## Post-Install Steps
 
 ```bash
-chezmoi init
-chezmoi apply
+# Install tmux plugins
+# Open tmux, then press: prefix + I
+
+# Install neovim plugins
+nvim  # Lazy.nvim will auto-install on first launch
+
+# Reload shell
+source ~/.zshrc
 ```
 
-## Manual Steps After Install
+## Key Features
 
-1. **tmux plugins**: Press `prefix + I` to install tmux plugins
-2. **neovim plugins**: Open neovim and run `:Lazy sync`
-3. **zsh completions**: Restart shell or run `compinit`
+### Shell (zsh)
 
-## Customization
+- **Smart history**: Shared across terminals, no duplicates
+- **Directory navigation**: `z` (zoxide), `..`, `...`, bookmarks (`~repos`, `~config`)
+- **Git shortcuts**: `gs`, `gp`, `gl`, `glog`, `fbr` (fuzzy branch checkout)
+- **Modern replacements**: `eza` for ls, `bat` for cat, `rg` for grep
 
-Edit files locally then add to chezmoi:
+### Tmux
 
-```bash
-# Edit a managed file
-chezmoi edit ~/.zshrc
+- **Prefix**: `Ctrl+a` (easier than default `Ctrl+b`)
+- **Splits**: `|` vertical, `-` horizontal (same directory)
+- **Navigation**: `Alt+arrows` between panes (no prefix needed)
+- **Persistence**: Auto-save/restore sessions with continuum
 
-# See what would change
-chezmoi diff
+### Neovim
 
-# Apply changes
-chezmoi apply
+- Based on [NvChad](https://nvchad.com/) v2.5
+- Theme: ayu_dark
+- Leader: `Space`
 
-# Add changes back to source
-chezmoi add ~/.zshrc
-```
+### Keyboard (Karabiner)
+
+- Caps Lock → Hyper key (Cmd+Ctrl+Option+Shift)
 
 ## Requirements
 
 - macOS (tested on Sonoma/Sequoia)
-- Homebrew
-- Git
-- 1Password with CLI enabled
+- [Homebrew](https://brew.sh/)
+- [1Password](https://1password.com/) with CLI (for my setup)
 
-### Recommended Tools (install via brew)
+### Recommended Tools
 
 ```bash
 brew install \
-  zsh \
-  tmux \
-  neovim \
-  starship \
-  zellij \
-  yazi \
-  eza \
-  fzf \
-  zoxide \
-  ripgrep \
-  fd \
-  bat \
-  lazygit \
-  gh
+  zsh tmux neovim \
+  starship zellij ghostty \
+  yazi eza bat fd ripgrep fzf \
+  zoxide lazygit gh
+```
+
+## Updating
+
+```bash
+# Pull latest changes
+chezmoi update
+
+# Or manually
+chezmoi git pull
+chezmoi apply
+```
+
+## Adding New Dotfiles
+
+```bash
+chezmoi add ~/.some-config      # Add file
+chezmoi edit ~/.some-config     # Edit managed file
+chezmoi diff                    # Preview changes
+chezmoi apply                   # Apply changes
+chezmoi cd                      # Go to source directory
+git add -A && git commit && git push
 ```
 
 ## License
 
-MIT
+MIT - Feel free to use and adapt.
+
+## Credits
+
+- [chezmoi](https://www.chezmoi.io/) - Dotfiles manager
+- [NvChad](https://nvchad.com/) - Neovim configuration
+- [Catppuccin](https://github.com/catppuccin) - Color scheme
+- [Starship](https://starship.rs/) - Shell prompt
