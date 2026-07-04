@@ -99,6 +99,8 @@ keybind = alt+arrow_left=unbind
 keybind = alt+arrow_right=unbind
 keybind = shift+arrow_left=unbind
 keybind = shift+arrow_right=unbind
+keybind = shift+arrow_up=unbind
+keybind = shift+arrow_down=unbind
 
 # Modified Enter — kitty keyboard protocol (CSI u) so tmux passes them through
 # to apps (Claude Code, etc.) instead of decoding ESC-prefixed bytes as M-Enter.

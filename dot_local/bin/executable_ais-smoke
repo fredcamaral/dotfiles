@@ -1,0 +1,290 @@
+#!/usr/bin/env zsh
+# ais-smoke: smoke test for Phase 5 of ai-sessions.sh — ai-adopt, _ai_find_log,
+# _ai_status_rows v2 (pane rows), _ai_pick_pane — on an ISOLATED tmux server.
+#
+# SAFETY: the default tmux server carries live agent sessions — every tmux call
+# in this file runs on a private socket (tmux -L aissmoke) with -f /dev/null
+# (no user config, hermetic server). The EXIT trap kills ONLY that server; the
+# only default-server touch is a READ-ONLY `tmux ls` snapshot asserted
+# byte-identical at the end. Functions under test route to the test server via
+# the AIL_SOCKET seam; TMUX is cleared in every subshell so nothing under test
+# ever resolves "the current client" against the default server.
+#
+# AIS_FILE (env) = path of the ai-sessions.sh under test; defaults to the real
+# one. RED is reproduced with AIS_FILE=~/.config/ai-sessions/ai-sessions.sh.bak5.
+# Cases run in sequence and build on each other's state. Prints PASS/FAIL per
+# check; exits 1 if any check failed.
+
+typeset -g SOCK=aissmoke
+typeset -g AIS_FILE="${AIS_FILE:-$HOME/.config/ai-sessions/ai-sessions.sh}"
+
+# Every tmux call in this file goes through T: private socket, no user config
+# (-f is only read at server start; harmless on later calls).
+T() { command tmux -L "$SOCK" -f /dev/null "$@" }
+
+typeset -g TMPROOT
+TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/ais-smoke.XXXXXX") || exit 1
+cleanup() { command tmux -L "$SOCK" kill-server 2>/dev/null; rm -rf "$TMPROOT"; true }
+trap cleanup EXIT
+# INT/TERM: cleanup alone would RESUME the script against a dead server,
+# cascading misleading FAILs — terminate explicitly.
+trap 'cleanup; exit 130' INT TERM
+command tmux -L "$SOCK" kill-server 2>/dev/null   # stale server from a previous run
+
+# ---- assertions ----
+
+typeset -gi fails=0
+pass() { print -r -- "PASS: $1" }
+fail() { print -r -- "FAIL: $1"; (( ++fails )) }
+# check <desc> <want> <got>
+check() {
+  if [[ "$3" == "$2" ]]; then pass "$1"; else fail "$1 — want [$2] got [$3]"; fi
+}
+# check_has <desc> <needle> <haystack>
+check_has() {
+  if [[ "$3" == *"$2"* ]]; then pass "$1"; else fail "$1 — [$2] not in [$3]"; fi
+}
+
+# ---- helpers ----
+
+count() { wc -l | tr -d ' ' }
+
+# in_test_env <zsh code> — run code in a fresh zsh that sourced AIS_FILE, with
+# tmux routed to the test server and TMUX cleared (never the default server's
+# client). COLUMNS pinned so _ai_status_widths is deterministic.
+in_test_env() {
+  TMUX= TMUX_PANE= AIL_SOCKET="$SOCK" AI_SESSIONS_DIR="$SESS" COLUMNS=120 \
+    zsh -fc "source ${(q)AIS_FILE}; $1" 2>&1
+}
+
+# ---- fixtures: git repo on branch main + temp sessions/logs dirs ----
+
+typeset -g REPO="$TMPROOT/fakerepo" SESS="$TMPROOT/sessions" LOGS="$TMPROOT/sessions/logs"
+mkdir -p "$REPO" "$LOGS"
+git -C "$REPO" init -q &&
+  git -C "$REPO" -c user.email=smoke@test -c user.name=smoke -c commit.gpgsign=false \
+      commit -q --allow-empty -m init &&
+  git -C "$REPO" checkout -q -B main \
+  || { echo "ais-smoke: cannot build fixture repo" >&2; exit 1 }
+
+# ---- case 0: default-server snapshot (READ-ONLY; compared at the end) ----
+
+typeset -g DEFAULT_BEFORE
+DEFAULT_BEFORE=$(command tmux ls -F '#{session_name}' 2>/dev/null)
+pass "case 0: default-server session list snapshotted (read-only)"
+
+# ---- case 1: hygiene — parses clean, defines the Phase 5 surface ----
+
+if zsh -n "$AIS_FILE" 2>/dev/null; then
+  pass "case 1: zsh -n parses clean"
+else
+  fail "case 1: zsh -n reports syntax errors"
+fi
+missing=$(AI_SESSIONS_DIR="$SESS" zsh -fc \
+  'source '"${(q)AIS_FILE}"'; for f in ai-adopt _ai_find_log _ai_pick_pane _ai_status_rows ai-status ai-claude; do
+     (( $+functions[$f] )) || print -r -- "$f"
+   done' 2>&1)
+check "case 1: fresh zsh -f defines the Phase 5 surface" "" "$missing"
+
+# ---- case 2: _ai_find_log — exact / closest-mtime / none (no tmux needed) ----
+
+# exact: <name>.log exists → returned verbatim.
+exact_name="cc-exactrepo-main-0704-120000-11111-1111"
+print -r -- "exact log body" > "$LOGS/${exact_name}.log"
+got=$(in_test_env "_ai_find_log ${(q)exact_name} 0")
+check "case 2: exact match returns <name>.log" "$LOGS/${exact_name}.log" "$got"
+
+# closest-mtime: no exact log; two same-base candidates, created sits nearer A.
+heur_name="cc-heurrepo-main-0704-130000-22222-2222"
+print -r -- "A" > "$LOGS/cc-heurrepo-main-0704-090000-1-1.log"
+print -r -- "B" > "$LOGS/cc-heurrepo-main-0704-113000-2-2.log"
+touch -t 202607040900 "$LOGS/cc-heurrepo-main-0704-090000-1-1.log"
+touch -t 202607041130 "$LOGS/cc-heurrepo-main-0704-113000-2-2.log"
+created=$(date -j -f '%Y%m%d%H%M' '202607040905' +%s)
+got=$(in_test_env "_ai_find_log ${(q)heur_name} ${(q)created}")
+check "case 2: closest-mtime heuristic picks the nearer candidate" \
+  "$LOGS/cc-heurrepo-main-0704-090000-1-1.log" "$got"
+
+# none: no exact, no candidates → empty stdout, non-zero return.
+got=$(in_test_env "_ai_find_log cc-nonerepo-x-0704-120000-3-3 0; print -r -- rc=\$?")
+check "case 2: no log → empty + non-zero rc" "rc=1" "$got"
+
+# ---- case 3: _ai_status_rows v2 — pane rows over fake tagged panes ----
+
+# Fake agents: real sleep processes in isengard, tagged the way _ai_run tags.
+p1=$(T new-session -d -s isengard -x 220 -y 50 -c "$REPO" -PF '#{pane_id}' 'sleep 600') \
+  || { echo "ais-smoke: cannot start test server" >&2; exit 1 }
+p1log="$LOGS/cc-fakerepo-main-0704-110000-1-1.log"
+print -r -- "p1 log body" > "$p1log"
+T set-option -p -t "$p1" @ai_agent cc
+T set-option -p -t "$p1" @ai_log "$p1log"
+T select-pane -t "$p1" -T 'cc:fakerepo/main'
+# p2: tagged but no log; new-window without -d → current window → focused pane.
+p2=$(T new-window -t '=isengard:' -c "$REPO" -PF '#{pane_id}' 'sleep 600')
+T set-option -p -t "$p2" @ai_agent oc
+T select-pane -t "$p2" -T 'oc:zed/dev'
+
+out=$(in_test_env "_ai_status_rows plain")
+check "case 3: two agent-pane rows" "2" "$(printf '%s\n' "$out" | count)"
+check "case 3: every row has 3 TAB fields" "3 3" \
+  "$(printf '%s\n' "$out" | awk -F'\t' '{print NF}' | paste -sd' ' -)"
+check "case 3: field 1 is a pane id on every row" "2" \
+  "$(printf '%s\n' "$out" | awk -F'\t' '$1 ~ /^%/' | count)"
+row1=$(printf '%s\n' "$out" | awk -F'\t' -v p="$p1" '$1==p')
+row2=$(printf '%s\n' "$out" | awk -F'\t' -v p="$p2" '$1==p')
+check "case 3: p1 field 2 = @ai_log path" "$p1log" \
+  "$(printf '%s\n' "$row1" | awk -F'\t' '{print $2}')"
+check "case 3: p2 (no log) field 2 = -" "-" \
+  "$(printf '%s\n' "$row2" | awk -F'\t' '{print $2}')"
+check_has "case 3: p1 repo from pane_current_path" "fakerepo" "$row1"
+check_has "case 3: p1 branch from pane_current_path" "main" "$row1"
+check_has "case 3: p1 agent label" "claude" "$row1"
+# ST = focused pane (active pane of the current window), not session_attached.
+if [[ "$row2" == *'*' ]]; then
+  pass "case 3: ST marks the focused pane (p2)"
+else
+  fail "case 3: ST missing on focused pane — row [$row2]"
+fi
+if [[ "$row1" != *'*' ]]; then
+  pass "case 3: ST absent on unfocused pane (p1)"
+else
+  fail "case 3: ST set on unfocused pane — row [$row1]"
+fi
+# p2 has no log → AGE/WRITE/SIZE all "-".
+check "case 3: p2 log-derived columns all -" "3" \
+  "$(printf '%s\n' "$row2" | awk -F'\t' '{print $3}' | grep -o -- '-' | count)"
+
+# --all: plain sessions ride along; isengard itself is never a row.
+T new-session -d -s scratch -x 80 -y 24 'sleep 600'
+out=$(in_test_env "_ai_status_rows plain all")
+check "case 3: --all keeps the 2 agent-pane rows" "2" \
+  "$(printf '%s\n' "$out" | awk -F'\t' '$1 ~ /^%/' | count)"
+check "case 3: --all adds the plain session" "1" \
+  "$(printf '%s\n' "$out" | awk -F'\t' '$1=="scratch"' | count)"
+check "case 3: --all excludes isengard" "0" \
+  "$(printf '%s\n' "$out" | awk -F'\t' '$1=="isengard"' | count)"
+
+# ---- case 3b: placeholders (Phase F) never appear in status rows ----
+# ail's fixed-grid pads decks with @ai_placeholder panes (@ai_agent unset,
+# title ·). Rows and pickers filter on @ai_agent — assert it anyway.
+
+ph=$(T split-window -d -t "$p2" -PF '#{pane_id}' 'sleep 600')
+T set-option -p -t "$ph" @ai_placeholder 1
+T select-pane -t "$ph" -T '·'
+out=$(in_test_env "_ai_status_rows plain")
+check "case 3b: still exactly 2 agent rows" "2" "$(printf '%s\n' "$out" | count)"
+check "case 3b: placeholder pane id absent from rows" "0" \
+  "$(printf '%s\n' "$out" | awk -F'\t' -v p="$ph" '$1==p' | count)"
+check "case 3b: no · identity leaks into the table" "0" \
+  "$(printf '%s\n' "$out" | grep -cF '·')"
+got=$(in_test_env "_ai_pick_pane '·'; print -r -- rc=\$?" | tail -n1)
+check "case 3b: picker finds no pane for the placeholder identity" "rc=1" "$got"
+T kill-pane -t "$ph" 2>/dev/null   # restore — later cases assume 2 panes
+
+# ---- case 4: _ai_pick_pane — prefix + substring, single-match path ----
+
+got=$(in_test_env "_ai_pick_pane cc")
+check "case 4: prefix filter cc → p1" "$p1" "$got"
+got=$(in_test_env "_ai_pick_pane opencode")
+check "case 4: long-form filter opencode → p2" "$p2" "$got"
+got=$(in_test_env "_ai_pick_pane zed")
+check "case 4: substring filter on pane title → p2" "$p2" "$got"
+got=$(in_test_env "_ai_pick_pane nomatch-xyz; print -r -- rc=\$?" | tail -n1)
+check "case 4: no match → non-zero rc" "rc=1" "$got"
+
+# ---- case 5: ai-adopt — full flow, isengard already exists ----
+
+# Fake legacy session exactly as v1 _ai_run birthed it: stamped name, real
+# sleep process, pipe-pane already wired to its exact-match log.
+leg="cc-fakerepo-main-0704-120000-12345-6789"
+print -r -- "legacy log body" > "$LOGS/${leg}.log"
+lp=$(T new-session -d -s "$leg" -x 200 -y 50 -c "$REPO" -PF '#{pane_id}' 'sleep 600')
+T pipe-pane -o -t "$lp" "cat >> ${(q)LOGS}/${leg}.log"
+lp_pid=$(T display-message -p -t "$lp" '#{pane_pid}')
+check "case 5: fixture pane pipes to its log" "1" "$(T display-message -p -t "$lp" '#{pane_pipe}')"
+
+out=$(in_test_env "ai-adopt; print -r -- rc=\$?")
+check_has "case 5: ai-adopt exits 0" "rc=0" "$out"
+check_has "case 5: reports one adoption" "adopted 1" "$out"
+if T has-session -t "=$leg" 2>/dev/null; then
+  fail "case 5: legacy session still exists"
+else
+  pass "case 5: legacy session gone"
+fi
+check "case 5: pane now lives in isengard" "isengard" \
+  "$(T display-message -p -t "$lp" '#{session_name}' 2>/dev/null)"
+check "case 5: @ai_agent tagged from name prefix" "cc" \
+  "$(T display-message -p -t "$lp" '#{@ai_agent}' 2>/dev/null)"
+check "case 5: @ai_log resolved to the exact log" "$LOGS/${leg}.log" \
+  "$(T display-message -p -t "$lp" '#{@ai_log}' 2>/dev/null)"
+check "case 5: pane title short-style from live git state" "cc:fakerepo/main" \
+  "$(T display-message -p -t "$lp" '#{pane_title}' 2>/dev/null)"
+check "case 5: window renamed short-style" "cc:fakerepo/main" \
+  "$(T display-message -p -t "$lp" '#{window_name}' 2>/dev/null)"
+check "case 5: allow-set-title off pinned" "off" \
+  "$(T show-options -p -v -t "$lp" allow-set-title 2>/dev/null)"
+check "case 5: allow-rename off pinned" "off" \
+  "$(T show-options -w -v -t "$lp" allow-rename 2>/dev/null)"
+check "case 5: automatic-rename off pinned" "off" \
+  "$(T show-options -w -v -t "$lp" automatic-rename 2>/dev/null)"
+check "case 5: SAME pane_pid across the move" "$lp_pid" \
+  "$(T display-message -p -t "$lp" '#{pane_pid}' 2>/dev/null)"
+if kill -0 "$lp_pid" 2>/dev/null; then
+  pass "case 5: agent process alive across the move"
+else
+  fail "case 5: agent process [$lp_pid] died"
+fi
+check "case 5: pipe-pane NOT re-wired (pane_pipe still 1)" "1" \
+  "$(T display-message -p -t "$lp" '#{pane_pipe}' 2>/dev/null)"
+
+# ---- case 6: ai-adopt — isengard absent → rename-session bootstrap ----
+
+T kill-session -t '=isengard' 2>/dev/null   # test socket ONLY
+leg2="oc-fakerepo-main-0704-140000-2222-3333"
+T new-session -d -s "$leg2" -x 200 -y 50 -c "$REPO" 'sleep 600'
+leg2_sid=$(T display-message -p -t "=${leg2}:" '#{session_id}')
+out=$(in_test_env "ai-adopt")
+check_has "case 6: reports one adoption" "adopted 1" "$out"
+if T has-session -t '=isengard' 2>/dev/null; then
+  pass "case 6: isengard exists after bootstrap"
+else
+  fail "case 6: isengard missing after bootstrap"
+fi
+check "case 6: bootstrap is a RENAME (same session_id, no junk window)" "$leg2_sid" \
+  "$(T display-message -p -t '=isengard:' '#{session_id}' 2>/dev/null)"
+check "case 6: exactly one window (no new-session shell)" "1" \
+  "$(T list-windows -t '=isengard' -F '#{window_id}' 2>/dev/null | count)"
+check "case 6: @ai_agent tagged oc" "oc" \
+  "$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{@ai_agent}' 2>/dev/null)"
+check "case 6: no log found → @ai_log stays empty" "" \
+  "$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{@ai_log}' 2>/dev/null)"
+check "case 6: window renamed short-style" "oc:fakerepo/main" \
+  "$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_name}' 2>/dev/null)"
+if T has-session -t '=scratch' 2>/dev/null; then
+  pass "case 6: non-legacy session untouched"
+else
+  fail "case 6: scratch session disappeared"
+fi
+
+# ---- case 7: ai-adopt — idempotent, second run finds nothing ----
+
+panes_before=$(T list-panes -s -t '=isengard' -F '#{pane_id}' 2>/dev/null | count)
+out=$(in_test_env "ai-adopt; print -r -- rc=\$?")
+check_has "case 7: second run reports nothing to adopt" "nothing to adopt" "$out"
+check_has "case 7: second run exits 0" "rc=0" "$out"
+check "case 7: pane count unchanged" "$panes_before" \
+  "$(T list-panes -s -t '=isengard' -F '#{pane_id}' 2>/dev/null | count)"
+
+# ---- case 8: default server untouched (read-only compare) ----
+
+check "case 8: default-server session list byte-identical" \
+  "$DEFAULT_BEFORE" "$(command tmux ls -F '#{session_name}' 2>/dev/null)"
+
+# ---- summary ----
+
+print -r -- "----"
+if (( fails > 0 )); then
+  print -r -- "ais-smoke: $fails check(s) FAILED"
+  exit 1
+fi
+print -r -- "ais-smoke: all checks passed"

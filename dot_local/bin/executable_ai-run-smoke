@@ -144,11 +144,16 @@ check "case 3: auto-pack joined it → 1 deck of 2" "1" "$(agent_windows | count
 drive oc hello-agent-3
 wait_until 25 agents_are 3
 check "case 3: third agent spawned" "3" "$(agent_panes | count)"
-wait_until 25 agent_windows_are 2
-dist=$(agent_windows | while IFS= read -r w; do
-         T display-message -p -t "$w" '#{window_panes}'
-       done | sort -n | paste -sd' ' -)
-check "case 3: 3 agents pack 2+1 (deck sizes 1 2)" "1 2" "$dist"
+# Phase F fixed grid: the tail deck is padded with a placeholder → sizes 2 2.
+# Poll the FINAL state: the pad spawn lands milliseconds after the join.
+deck_dist() {
+  agent_windows | while IFS= read -r w; do
+    T display-message -p -t "$w" '#{window_panes}'
+  done | sort -n | paste -sd' ' -
+}
+deck_dist_is() { [[ "$(deck_dist)" == "$1" ]] }
+wait_until 25 deck_dist_is "2 2"
+check "case 3: 3 agents pack 2+1+pad (deck sizes 2 2)" "2 2" "$(deck_dist)"
 
 # ---- case 4: mode 1 → a new spawn stays a solo window, no join ----
 

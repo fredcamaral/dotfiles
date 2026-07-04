@@ -63,6 +63,14 @@ wopt() { T show-options -g -w -v "$1" 2>/dev/null }
 
 # ---- case 1: conf parses, server starts ----
 
+# Inert ail stub: the conf's pane-exited/after-kill-pane hooks expand $HOME
+# at conf-load to TMPROOT — without a binary there, any pane death mid-run
+# paints an rc-127 run-shell overlay into panes (the exact flake class
+# isengard-smoke already stubs). exit-0 stub: can never reach any server.
+mkdir -p "$TMPROOT/.local/bin"
+printf '#!/bin/sh\nexit 0\n' > "$TMPROOT/.local/bin/ail"
+chmod +x "$TMPROOT/.local/bin/ail"
+
 env HOME="$TMPROOT" command tmux -L "$SOCK" -f "$CONF" \
   new-session -d -s t -x 220 -y 50 'sleep 600'
 check "case 1: server starts with conf" "0" "$?"
@@ -85,7 +93,7 @@ has "case 3: M-r → rename prompt (command-prompt)" 'command-prompt' "$mr"
 has "case 3: M-r prefills #W via -I" '-I "#W"' "$mr"
 has "case 3: M-r runs rename-window" 'rename-window' "$mr"
 typeset -i n
-for n in 1 2 8; do
+for n in 1 2 3 4 5 6 7 8 9; do
   # \$HOME literal: run-shell must defer expansion to /bin/sh — the tmux
   # server's PATH may lack ~/.local/bin, and conf-time expansion would bake in
   # whatever HOME the server started with.
@@ -97,10 +105,32 @@ for n in 1 2 8; do
     '>/dev/null' "$(key_cmd M-$n)"
 done
 
-# ---- case 4: retired binds — session axis off the root table ----
+# ---- case 3b: spawn picker + repack hooks (Phase F) ----
 
-check "case 4: M-o unbound" "" "$(key_cmd M-o)"
-check "case 4: M-p unbound" "" "$(key_cmd M-p)"
+mn="$(key_cmd M-n)"
+has "case 3b: M-n → display-popup" 'display-popup' "$mn"
+has "case 3b: M-n popup runs ai-new" 'ai-new' "$mn"
+# pane-exited is a WINDOW hook (show-hooks -gw); after-kill-pane is a command
+# hook on the session table (show-hooks -g).
+pe=$(T show-hooks -gw 2>/dev/null | grep '^pane-exited')
+akp=$(T show-hooks -g 2>/dev/null | grep '^after-kill-pane')
+has "case 3b: pane-exited hook → ail --repack" 'ail --repack' "$pe"
+has "case 3b: pane-exited hook silences stdout" '>/dev/null' "$pe"
+# set-hook parses its command eagerly: $HOME expands at conf-load with the
+# SERVER's environment — here the redirected TMPROOT home, on the live server
+# the real one. Asserting the redirect proves the conf bakes in no absolute
+# user path.
+has "case 3b: pane-exited hook path is \$HOME-relative (per-server expansion)" \
+  "$TMPROOT/.local/bin/ail" "$pe"
+# kill-pane does NOT emit pane-exited (tmux 3.7b) — ai-kill / ais ^k need the
+# command hook too, or explicit kills leave the deck unbalanced.
+has "case 3b: after-kill-pane hook → ail --repack" 'ail --repack' "$akp"
+has "case 3b: after-kill-pane hook silences stdout" '>/dev/null' "$akp"
+
+# ---- case 4: M-p/M-o — tab-hop aliases (pre-isengard muscle memory) ----
+
+check "case 4: M-p → previous-window" "previous-window" "$(key_cmd M-p)"
+check "case 4: M-o → next-window" "next-window" "$(key_cmd M-o)"
 
 # ---- case 5: untouched binds ----
 

@@ -4,10 +4,13 @@
 # SAFETY: the default tmux server carries live agent sessions — every tmux call
 # in this file runs on a private socket (tmux -L ailsmoke) with -f /dev/null
 # (no user config, hermetic server). The EXIT trap kills ONLY that server; no
-# command in this file ever addresses the default server.
+# command in this file ever addresses the default server. The pane-exited hook
+# under test is set-hook'd on THIS server only, and unset before later cases.
 #
 # Fake agents are `sleep 600` panes tagged with the @ai_agent pane option and a
 # `prefix:repo/branch` pane title — exactly the identity contract ail packs on.
+# Placeholders are ail's own: plain shell panes tagged @ai_placeholder=1,
+# title `·`, @ai_agent unset (Phase F fixed-grid contract).
 # Cases run in sequence and build on each other's state (mode switches are the
 # thing under test). Prints PASS/FAIL per case; exits 1 if any case failed.
 
@@ -60,11 +63,30 @@ agent_panes_ordered() {
   T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{pane_id}' | sort -t'%' -k2,2n
 }
 
+# placeholder_panes — pane ids of every @ai_placeholder pane in isengard.
+placeholder_panes() {
+  T list-panes -s -t '=isengard' -f '#{@ai_placeholder}' -F '#{pane_id}' 2>/dev/null
+}
+
 # panes_of <window-name> — pane count of the window named $1 ("" if absent).
 panes_of() {
   T list-windows -t '=isengard' -F '#{window_name}:#{window_panes}' \
     | awk -F: -v n="$1" '$1 == n { print $2; exit }'
 }
+
+# wid_of <window-name> — window id of the window named $1 ("" if absent).
+wid_of() {
+  T list-windows -t '=isengard' -F '#{window_name}|#{window_id}' \
+    | awk -F'|' -v n="$1" '$1 == n { print $2; exit }'
+}
+
+# deck_sizes — window_panes per agent-holding window, sorted (padding visible).
+deck_sizes() {
+  agent_windows | while IFS= read -r w; do
+    T display-message -p -t "$w" '#{window_panes}'
+  done | sort -n | paste -sd' ' -
+}
+deck_sizes_are() { [[ "$(deck_sizes)" == "$1" ]] }
 
 # zoomed_count — number of isengard windows currently zoomed.
 zoomed_count() {
@@ -72,6 +94,16 @@ zoomed_count() {
 }
 
 count() { wc -l | tr -d ' ' }
+
+# wait_until <tries> <cmd...> — poll cmd every 0.2s; 0 as soon as it succeeds.
+wait_until() {
+  local -i tries="$1"; shift
+  while (( tries-- > 0 )); do
+    "$@" >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  return 1
+}
 
 # ---- setup: isengard + 9 fake agents ----
 
@@ -86,23 +118,30 @@ for i in {1..9}; do
 done
 check "setup: 9 agent panes tagged" "9" "$(agent_panes_ordered | count)"
 
-# ---- case 1: ail 8 → two decks, 8+1 ----
+# ---- case 1: ail 8 → two decks; the LAST is padded to 8 with placeholders ----
 
 run_ail 8
 check "case 1: ail 8 → 2 agent windows" "2" "$(agent_windows | count)"
 check "case 1: d1 has 8 panes" "8" "$(panes_of d1)"
-check "case 1: d2 has 1 pane" "1" "$(panes_of d2)"
+check "case 1: d2 padded to 8 panes (1 agent + 7 placeholders)" "8" "$(panes_of d2)"
+check "case 1: 7 placeholder panes total" "7" "$(placeholder_panes | count)"
+d2_wid=$(wid_of d2)
+check "case 1: all placeholders live in d2" "7" \
+  "$(T list-panes -t "$d2_wid" -f '#{@ai_placeholder}' -F '#{pane_id}' | count)"
+check "case 1: placeholders carry no @ai_agent (invisible to pickers)" "" \
+  "$(placeholder_panes | while IFS= read -r p; do T display-message -p -t "$p" '#{@ai_agent}'; done | grep -v '^$')"
+check "case 1: placeholder pane title is ·" "·" \
+  "$(placeholder_panes | while IFS= read -r p; do T display-message -p -t "$p" '#{pane_title}'; done | sort -u)"
 
-# ---- case 2: ail 2 → five decks, 4x2 + 1x1 ----
+# ---- case 2: ail 2 → five decks of 2; last deck padded with 1 placeholder ----
 
 run_ail 2
 check "case 2: ail 2 → 5 agent windows" "5" "$(agent_windows | count)"
-dist=$(agent_windows | while IFS= read -r w; do
-         T display-message -p -t "$w" '#{window_panes}'
-       done | sort -n | paste -sd' ' -)
-check "case 2: deck sizes 1 2 2 2 2" "1 2 2 2 2" "$dist"
+check "case 2: deck sizes 2 2 2 2 2 (last padded)" "2 2 2 2 2" "$(deck_sizes)"
+check "case 2: exactly 1 placeholder survives the mode switch" "1" \
+  "$(placeholder_panes | count)"
 
-# ---- case 3: ail 1 → one tab per agent, tab name = pane title ----
+# ---- case 3: ail 1 → one tab per agent, no padding by construction ----
 
 run_ail 1
 check "case 3: ail 1 → 9 agent windows" "9" "$(agent_windows | count)"
@@ -110,6 +149,7 @@ bad=$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' \
         -F '#{window_name}|#{pane_title}|#{window_panes}' \
       | awk -F'|' '$1 != $2 || $3 != 1' | count)
 check "case 3: every window solo + named by pane title" "0" "$bad"
+check "case 3: mode 1 → zero placeholders" "0" "$(placeholder_panes | count)"
 
 # ---- case 4: non-agent immunity ----
 
@@ -131,13 +171,18 @@ run_ail 2
 active=$(T display-message -p -t '=isengard:' '#{pane_id}')
 check "case 5: active pane survives ail 2" "$target" "$active"
 
-# ---- case 6: idempotency — ail 8 twice, identical window map ----
+# ---- case 6: idempotency — ail 8 twice, identical window map AND pane set ----
+# The pane set matters: a repack that kills + respawns placeholders would churn
+# pane ids — and the pane-exited hook relies on no-change repacks being no-ops.
 
 run_ail 8
 snap1=$(T list-windows -t '=isengard' -F '#{window_id}:#{window_panes}')
+panes1=$(T list-panes -s -t '=isengard' -F '#{pane_id}')
 run_ail 8
 snap2=$(T list-windows -t '=isengard' -F '#{window_id}:#{window_panes}')
-check "case 6: ail 8 twice → identical snapshot" "$snap1" "$snap2"
+panes2=$(T list-panes -s -t '=isengard' -F '#{pane_id}')
+check "case 6: ail 8 twice → identical window snapshot" "$snap1" "$snap2"
+check "case 6: ail 8 twice → identical pane-id set (placeholders stable)" "$panes1" "$panes2"
 
 # ---- case 7: zoom guard ----
 
@@ -148,7 +193,7 @@ check "case 7: precondition — one window zoomed" "1" "$(zoomed_count)"
 run_ail 8
 check "case 7: no window left zoomed after ail 8" "0" "$(zoomed_count)"
 check "case 7: d1 still 8 panes" "8" "$(panes_of d1)"
-check "case 7: d2 still 1 pane" "1" "$(panes_of d2)"
+check "case 7: d2 still padded to 8 panes" "8" "$(panes_of d2)"
 
 # ---- case 7b: zoomed NON-agent window keeps its zoom (immunity) ----
 
@@ -162,8 +207,7 @@ T resize-pane -Z -t "$shell_wid"   # restore
 
 # ---- case 7c: drained deck window gives back its dN name ----
 
-d1_wid=$(T list-windows -t '=isengard' -F '#{window_id} #{window_name}' \
-         | awk '$2 == "d1" { print $1; exit }')
+d1_wid=$(wid_of d1)
 stray=$(T split-window -d -t "$d1_wid" -PF '#{pane_id}' 'sleep 600')
 run_ail 8
 check "case 7c: exactly one window named d1 after re-pack" "1" \
@@ -190,13 +234,151 @@ for m in 2 1 8; do
     "$(T show-options -v -t '=isengard:' @ai_mode 2>/dev/null)"
 done
 
-# ---- case 10: zero agents still records @ai_mode (spawn-side pre-set flow) ----
+# ---- case 10: a new spawn consumes a placeholder slot IN PLACE ----
+# 9 agents mode 8: d2 = 1 agent + 7 placeholders. The 10th agent joins the
+# tail deck's EXISTING window: same window id (no tab-bar jump), exactly one
+# idle placeholder yields, the other six keep their pane ids — no
+# demolish-and-respawn churn.
+
+d2_wid_before=$(wid_of d2)
+ph_before=$(placeholder_panes | sort)
+spawn_agent cc 'cc:repo10/branch10' >/dev/null || fail "case 10: spawn_agent 10"
+run_ail 8   # what _ai_run's auto-pack calls
+check "case 10: deck sizes stay 8 8" "8 8" "$(deck_sizes)"
+check "case 10: placeholders down to 6" "6" "$(placeholder_panes | count)"
+d2_wid=$(wid_of d2)
+check "case 10: d2 holds 2 agent panes now" "2" \
+  "$(T list-panes -t "$d2_wid" -f '#{@ai_agent}' -F x | count)"
+check "case 10: d2 window id stable (deck not demolished)" "$d2_wid_before" "$d2_wid"
+check "case 10: survivors are 6 of the original 7 (exactly one yielded)" "6" \
+  "$(comm -12 <(print -r -- "$ph_before") <(placeholder_panes | sort) | count)"
+check "case 10: zero respawned placeholders (no churn)" "0" \
+  "$(comm -13 <(print -r -- "$ph_before") <(placeholder_panes | sort) | count)"
+check "case 10: agents lead the deck, placeholders trail" "dr cc" \
+  "$(T list-panes -t "$d2_wid" -F '#{@ai_agent}' | head -n2 | paste -sd' ' -)"
+
+# ---- case 11: overfull reconcile — IDLE placeholders die, BUSY is promoted ----
+# Mark one placeholder busy (user started something in it), then switch to a
+# mode with a full tail deck (10 agents, ail 2 → pad 0): the 5 idle
+# placeholders are killed; the busy one is promoted to its own plain window.
+
+busy=$(placeholder_panes | head -n1)
+# The placeholder shell may still be loading rc files — typeahead is fine, but
+# poll until the foreground command IS the marker before asserting anything.
+T send-keys -t "$busy" 'sleep 600' Enter
+busy_running() { [[ "$(T display-message -p -t "$busy" '#{pane_current_command}')" == sleep ]] }
+if wait_until 100 busy_running; then
+  pass "case 11: precondition — placeholder marked busy (sleep in foreground)"
+else
+  fail "case 11: placeholder never went busy — cmd [$(T display-message -p -t "$busy" '#{pane_current_command}')]"
+fi
+run_ail 2
+check "case 11: deck sizes 2 2 2 2 2 (full tail → no padding)" "2 2 2 2 2" "$(deck_sizes)"
+check "case 11: zero placeholders left" "0" "$(placeholder_panes | count)"
+busy_alive=$(T list-panes -s -t '=isengard' -F '#{pane_id}' | grep -cxF "$busy")
+check "case 11: busy placeholder NOT killed" "1" "$busy_alive"
+check "case 11: promoted to its own plain window" "1" \
+  "$(T display-message -p -t "$busy" '#{window_panes}' 2>/dev/null)"
+check "case 11: @ai_placeholder unset on the promoted pane" "" \
+  "$(T display-message -p -t "$busy" '#{@ai_placeholder}' 2>/dev/null)"
+
+# ---- case 12: ail --repack — silent no-op when @ai_mode is unset ----
+# The pane-exited hook fires on servers/sessions that never declared a mode;
+# --repack must exit 0 with no output and change nothing.
+
+T set-option -t '=isengard:' -u @ai_mode
+snap1=$(T list-windows -t '=isengard' -F '#{window_id}:#{window_panes}')
+out=$("$AIL" --repack 2>&1); rc=$?
+check "case 12: --repack with mode unset exits 0" "0" "$rc"
+check "case 12: --repack with mode unset prints nothing" "" "$out"
+check "case 12: --repack with mode unset changes nothing" "$snap1" \
+  "$(T list-windows -t '=isengard' -F '#{window_id}:#{window_panes}')"
+
+# ---- case 13: ail --repack — runs the declared mode ----
+
+run_ail 8   # re-declare mode 8 (10 agents → d1 8, d2 2+6p)
+run_ail 2   # scramble to decks of 2 first…
+T set-option -t '=isengard:' @ai_mode 8   # …then declare 8 without packing
+"$AIL" --repack >/dev/null 2>&1 || fail "case 13: ail --repack exited non-zero"
+check "case 13: --repack re-packed to the declared mode (sizes 8 8)" "8 8" "$(deck_sizes)"
+check "case 13: placeholders padded back to 6" "6" "$(placeholder_panes | count)"
+
+# ---- case 14: repack hooks — a dead agent pane repairs the deck ----
+# THE bug this phase fixes: a dead agent must not leave the deck unbalanced.
+# Two death paths, two hooks: pane-exited fires when the pane's process dies
+# (agent quits/crashes); kill-pane does NOT emit pane-exited in tmux 3.7b, so
+# after-kill-pane covers explicit kills (ai-kill, ais ^k). Hooks go on the
+# TEST server only; the command carries the socket seam explicitly (run-shell
+# strings run bare under /bin/sh, no inherited env).
+
+T set-hook -g pane-exited "run-shell 'AIL_SOCKET=$SOCK $AIL --repack >/dev/null'"
+T set-hook -g after-kill-pane "run-shell 'AIL_SOCKET=$SOCK $AIL --repack >/dev/null'"
+# Path 1: the agent PROCESS dies (pane-exited).
+victim=$(T list-panes -t "$(wid_of d1)" -f '#{@ai_agent}' -F '#{pane_id}' | sed -n 2p)
+kill "$(T display-message -p -t "$victim" '#{pane_pid}')" 2>/dev/null
+agents_9() { [[ "$(agent_panes_ordered | count)" == 9 ]] }
+deck_repaired() { deck_sizes_are "8 8" && [[ "$(placeholder_panes | count)" == 7 ]] }
+if wait_until 100 agents_9; then
+  pass "case 14: agent process killed (9 left)"
+else
+  fail "case 14: agent count never reached 9"
+fi
+if wait_until 100 deck_repaired; then
+  pass "case 14: pane-exited hook repaired the deck (sizes 8 8, 7 placeholders)"
+else
+  fail "case 14: deck never repaired — sizes [$(deck_sizes)] placeholders [$(placeholder_panes | count)]"
+fi
+# even re-layout proxy: every pane in d1 is a full-height column.
+check "case 14: d1 panes are full-height columns (even re-layout)" "11" \
+  "$(T list-panes -t "$(wid_of d1)" -F '#{pane_at_top}#{pane_at_bottom}' | sort -u | paste -sd' ' -)"
+# Path 2: explicit kill-pane (a user closing a placeholder, ais ^k).
+T kill-pane -t "$(placeholder_panes | head -n1)"
+if wait_until 100 deck_repaired; then
+  pass "case 14: kill-pane'd placeholder refilled (after-kill-pane hook)"
+else
+  fail "case 14: placeholder never refilled — sizes [$(deck_sizes)] placeholders [$(placeholder_panes | count)]"
+fi
+T set-hook -gu pane-exited     # later cases kill in bulk —
+T set-hook -gu after-kill-pane # keep them deterministic
+
+# ---- case 15: arbitrary modes 3/4/9/5 (9 agents) ----
+
+run_ail 3
+check "case 15: ail 3 → sizes 3 3 3 (full tail → no padding)" "3 3 3" "$(deck_sizes)"
+check "case 15: ail 3 → zero placeholders" "0" "$(placeholder_panes | count)"
+run_ail 4
+check "case 15: ail 4 → sizes 4 4 4 (tail padded)" "4 4 4" "$(deck_sizes)"
+check "case 15: ail 4 → 3 placeholders" "3" "$(placeholder_panes | count)"
+run_ail 9
+check "case 15: ail 9 → one deck of 9, no padding" "9" "$(deck_sizes)"
+check "case 15: ail 9 → zero placeholders" "0" "$(placeholder_panes | count)"
+run_ail 5
+check "case 15: ail 5 → sizes 5 5 (tail padded)" "5 5" "$(deck_sizes)"
+check "case 15: ail 5 → 1 placeholder" "1" "$(placeholder_panes | count)"
+
+# ---- case 16: validation — N outside 1..9 is rejected ----
+
+"$AIL" 10 >/dev/null 2>&1 && fail "case 16: ail 10 must be rejected (rc 0)" \
+  || pass "case 16: ail 10 rejected"
+"$AIL" 0 >/dev/null 2>&1 && fail "case 16: ail 0 must be rejected (rc 0)" \
+  || pass "case 16: ail 0 rejected"
+check "case 16: @ai_mode untouched by rejected calls" "5" \
+  "$(T show-options -v -t '=isengard:' @ai_mode 2>/dev/null)"
+
+# ---- case 17: zero agents — ail N builds the empty desk; ail 1 clears it ----
 
 agent_panes_ordered | while IFS= read -r p; do T kill-pane -t "$p" 2>/dev/null; done
-check "case 10: all agents gone" "0" "$(agent_panes_ordered | count)"
+check "case 17: all agents gone" "0" "$(agent_panes_ordered | count)"
 run_ail 5
-check "case 10: @ai_mode == 5 with zero agents" "5" \
+check "case 17: @ai_mode == 5 with zero agents" "5" \
   "$(T show-options -v -t '=isengard:' @ai_mode 2>/dev/null)"
+check "case 17: empty desk — 5 placeholders" "5" "$(placeholder_panes | count)"
+check "case 17: desk is one window" "1" \
+  "$(placeholder_panes | while IFS= read -r p; do T display-message -p -t "$p" '#{window_id}'; done | sort -u | count)"
+check "case 17: desk window named d1 with 5 panes" "5" "$(panes_of d1)"
+run_ail 1
+check "case 17: ail 1 clears the desk (no padding by construction)" "0" \
+  "$(placeholder_panes | count)"
 
 # ---- summary ----
 

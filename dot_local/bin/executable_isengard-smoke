@@ -1,0 +1,380 @@
+#!/usr/bin/env zsh
+# isengard-smoke: INTEGRATED e2e smoke for the isengard agent workspace —
+# real _ai_run + real ail + real ais + real ai-adopt together on ONE isolated
+# tmux server (Phase 6 of 2026-07-03-isengard-agent-workspace.md).
+#
+# SAFETY: the default tmux server IS the live isengard with real agents —
+# every tmux call in this file runs on a private socket (tmux -L e2esmoke).
+# The e2e server is started ONCE with the REAL ~/.tmux.conf under HOME=$TMPROOT
+# (the TPM if-shell misses → no plugins, continuum can never write); later T()
+# calls carry -f /dev/null so an accidental server restart is hermetic, never
+# conf-loading. The EXIT trap kills ONLY the e2esmoke server. Default-server
+# touches are READ-ONLY: a session-list snapshot (asserted identical at the
+# end) and the case-6 pane-id superset guard.
+#
+# Driver-pane technique (ai-run-smoke house style): launchers and fzf demand a
+# TTY, so _ai_run and ais run INSIDE panes of the test server. Fake agents are
+# zsh sleep processes that echo a unique marker first (preview evidence).
+# Cases run in sequence and build on each other's state. Prints PASS/FAIL per
+# check; exits 1 if any check failed.
+
+typeset -g SOCK=e2esmoke
+typeset -g AI_SH="${AI_SH:-$HOME/.config/ai-sessions/ai-sessions.sh}"
+typeset -g AIL="${AIL:-$HOME/.local/bin/ail}"
+typeset -g CONF="${CONF:-$HOME/.tmux.conf}"
+typeset -g REALHOME="$HOME"
+export AIL_SOCKET="$SOCK"
+
+# Every tmux call in this file goes through T. -f /dev/null is only read at
+# server start — the real server is started explicitly below with $CONF.
+T() { command tmux -L "$SOCK" -f /dev/null "$@" }
+
+typeset -g TMPROOT
+TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/isengard-smoke.XXXXXX") || exit 1
+# Settle before rm: dying placeholder zshs (HOME=$TMPROOT) write .zsh_sessions
+# on exit and race a bare rm -rf ("Directory not empty").
+cleanup() { command tmux -L "$SOCK" kill-server 2>/dev/null; sleep 0.5; rm -rf "$TMPROOT" 2>/dev/null; true }
+trap cleanup EXIT
+# INT/TERM: cleanup alone would RESUME the script against a dead server,
+# cascading misleading FAILs — terminate explicitly.
+trap 'cleanup; exit 130' INT TERM
+command tmux -L "$SOCK" kill-server 2>/dev/null   # stale server from a previous run
+
+# ---- assertions ----
+
+typeset -gi fails=0
+pass() { print -r -- "PASS: $1" }
+fail() { print -r -- "FAIL: $1"; (( ++fails )) }
+# check <desc> <want> <got>
+check() {
+  if [[ "$3" == "$2" ]]; then pass "$1"; else fail "$1 — want [$2] got [$3]"; fi
+}
+# check_has <desc> <needle> <haystack>
+check_has() {
+  if [[ "$3" == *"$2"* ]]; then pass "$1"; else fail "$1 — [$2] not in [$3]"; fi
+}
+
+# --8<-- high-risk assert helpers (extracted verbatim by the strength demo)
+# assert_panes_survive <desc> <before-ids> <after-ids> — every pane id present
+# before must still exist after (new panes may appear; a MISSING pane means a
+# kill leaked onto that server → FAIL).
+assert_panes_survive() {
+  local desc="$1" before="$2" after="$3" id missing=""
+  for id in ${(f)before}; do
+    # exact-line membership: substring matching would let a leaked kill of %1
+    # false-PASS whenever a superstring id (%10, %11, ...) exists in after.
+    [[ $'\n'"$after"$'\n' == *$'\n'"$id"$'\n'* ]] || missing+="$id "
+  done
+  if [[ -z "$missing" ]]; then pass "$desc"; else fail "$desc — panes vanished: $missing"; fi
+}
+# assert_no_brace_leak <desc> <rendered> — a RENDERED status string must carry
+# no raw #{ (a ##{ leftover renders as literal #{ → also caught).
+assert_no_brace_leak() {
+  if [[ "$2" != *'#{'* ]]; then pass "$1"; else fail "$1 — raw format artifact in [$2]"; fi
+}
+# --8<-- end high-risk assert helpers
+
+# ---- helpers ----
+
+count() { wc -l | tr -d ' ' }
+
+# wait_until <tries> <cmd...> — poll cmd every 0.2s; 0 as soon as it succeeds.
+wait_until() {
+  local -i tries="$1"; shift
+  while (( tries-- > 0 )); do
+    "$@" >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+agent_panes() { T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{pane_id}' 2>/dev/null }
+agent_windows() { T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_id}' 2>/dev/null | sort -u }
+agents_are() { [[ "$(agent_panes | count)" == "$1" ]] }
+placeholder_panes() { T list-panes -s -t '=isengard' -f '#{@ai_placeholder}' -F '#{pane_id}' 2>/dev/null }
+placeholders_are() { [[ "$(placeholder_panes | count)" == "$1" ]] }
+# grid_is <sizes> <placeholder-count> — Phase F fixed-grid steady state.
+grid_is() { deck_sizes_are "$1" && placeholders_are "$2" }
+deck_sizes() {
+  agent_windows | while IFS= read -r w; do
+    T display-message -p -t "$w" '#{window_panes}'
+  done | sort -n | paste -sd' ' -
+}
+deck_sizes_are() { [[ "$(deck_sizes)" == "$1" ]] }
+# run_ail <args...> — invoke real ail on the e2e server; non-zero exit = FAIL.
+run_ail() { "$AIL" "$@" >/dev/null 2>&1 || fail "ail $* exited non-zero" }
+
+# ---- fixtures: git repo (branch main) + temp sessions dir + e2e server ----
+
+typeset -g REPO="$TMPROOT/e2erepo" SESS="$TMPROOT/sessions" LOGS="$TMPROOT/sessions/logs"
+mkdir -p "$REPO" "$LOGS"
+git -C "$REPO" init -q &&
+  git -C "$REPO" -c user.email=smoke@test -c user.name=smoke -c commit.gpgsign=false \
+      commit -q --allow-empty -m init &&
+  git -C "$REPO" checkout -q -B main \
+  || { echo "isengard-smoke: cannot build fixture repo" >&2; exit 1 }
+
+# The real conf wires pane-exited/after-kill-pane hooks to $HOME/.local/bin/ail,
+# and set-hook expands $HOME at conf-load — the redirected TMPROOT. A missing
+# binary there means rc 127 on EVERY pane death, and tmux paints "returned 127"
+# copy-mode overlays into live panes (breaks capture-based asserts). An inert
+# rc-0 stub keeps the hooks harmless; it does nothing, so it can also never
+# reach the default server. Real repacks in this smoke come from the explicit
+# auto-pack calls, which use the AIL_SOCKET seam.
+mkdir -p "$TMPROOT/.local/bin"
+printf '#!/bin/sh\nexit 0\n' > "$TMPROOT/.local/bin/ail"
+chmod +x "$TMPROOT/.local/bin/ail"
+
+# The ONLY conf-loading server start: real conf, HOME redirected (TPM misses).
+HOME="$TMPROOT" command tmux -L "$SOCK" -f "$CONF" \
+  new-session -d -s driver -x 220 -y 50 'sleep 900' \
+  || { echo "isengard-smoke: cannot start e2e server with real conf" >&2; exit 1 }
+# isengard is born DETACHED by _ai_run → tmux default-size (80x24). The fixed
+# grid packs 8 columns even for few agents — on 80 cols that is ~9-wide panes,
+# narrow enough to wrap the e2e-fake-N markers mid-string and blind the
+# preview greps. Size detached sessions like the driver.
+T set-option -g default-size '220x50'
+
+# drive <prefix> <marker> — run _ai_run in a throwaway driver pane; the fake
+# agent echoes <marker> once (preview evidence for case 6), then sleeps.
+# Server env carries HOME=$TMPROOT — the script restores the real HOME so
+# _ai_run's $HOME/.local/bin/ail auto-pack resolves.
+typeset -gi drives=0
+drive() {
+  local scr="$TMPROOT/drive-$(( ++drives )).zsh"
+  cat > "$scr" <<EOF
+export HOME=${(q)REALHOME} AIL_SOCKET=${(q)SOCK} AI_SESSIONS_DIR=${(q)SESS}
+source ${(q)AI_SH}
+_ai_run $1 zsh -c 'echo $2; sleep 600'
+EOF
+  T new-window -d -t '=driver:' -c "$REPO" "zsh -f ${(q)scr}"
+}
+
+# in_test_env <zsh code> — fresh zsh sourcing AI_SH, tmux routed to the e2e
+# server, TMUX cleared (never the default server's client). ais-smoke style.
+in_test_env() {
+  TMUX= TMUX_PANE= AIL_SOCKET="$SOCK" AI_SESSIONS_DIR="$SESS" COLUMNS=120 \
+    zsh -fc "source ${(q)AI_SH}; $1" 2>&1
+}
+
+# ---- case 0: default-server snapshot (READ-ONLY; compared at the end) ----
+
+typeset -g DEFAULT_BEFORE
+DEFAULT_BEFORE=$(command tmux ls -F '#{session_name}' 2>/dev/null)
+pass "case 0: default-server session list snapshotted (read-only)"
+
+# ---- case 1: 9 fakes via real _ai_run → 9 tagged panes in isengard ----
+
+typeset -gi i
+for (( i = 1; i <= 9; i++ )); do
+  drive cc "e2e-fake-$i"
+  wait_until 50 agents_are $i || break
+done
+if wait_until 25 T has-session -t '=isengard'; then
+  pass "case 1: isengard created on the e2e server"
+else
+  fail "case 1: isengard never appeared"
+fi
+check "case 1: 9 tagged agent panes" "9" "$(agent_panes | count)"
+check "case 1: all 9 tagged cc" "cc" \
+  "$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{@ai_agent}' 2>/dev/null | sort -u | paste -sd' ' -)"
+check "case 1: all titled from the fixture repo" "cc:e2erepo/main" \
+  "$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{pane_title}' 2>/dev/null | sort -u | paste -sd' ' -)"
+
+# ---- case 2: ail 8 → deck1 = 8 columns; deck2 padded to 8 (fixed grid) ----
+
+run_ail 8
+check "case 2: @ai_mode == 8" "8" "$(T show-options -v -t '=isengard:' @ai_mode 2>/dev/null)"
+check "case 2: 2 decks" "2" "$(agent_windows | count)"
+check "case 2: deck sizes 8 8 (tail padded)" "8 8" "$(deck_sizes)"
+check "case 2: 7 placeholders pad the tail deck" "7" "$(placeholder_panes | count)"
+check "case 2: decks named d1 d2" "d1 d2" \
+  "$(agent_windows | while IFS= read -r w; do T display-message -p -t "$w" '#{window_name}'; done | sort | paste -sd' ' -)"
+# even-horizontal proxy: every pane in the 8-deck is a full-height column.
+big_deck=$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_id} #{window_panes}' 2>/dev/null \
+           | awk '$2==8{print $1; exit}')
+check "case 2: all 8 panes are full-height columns" "11" \
+  "$(T list-panes -t "$big_deck" -F '#{pane_at_top}#{pane_at_bottom}' 2>/dev/null | sort -u | paste -sd' ' -)"
+
+# ---- case 3: ail 2 → 5 decks of ≤2; ail 1 → 9 tabs named by title ----
+
+run_ail 2
+check "case 3: ail 2 → 5 decks" "5" "$(agent_windows | count)"
+check "case 3: deck sizes 2 2 2 2 2 (tail padded)" "2 2 2 2 2" "$(deck_sizes)"
+run_ail 1
+check "case 3: ail 1 → 9 solo windows" "9" "$(agent_windows | count)"
+check "case 3: mode 1 → zero placeholders" "0" "$(placeholder_panes | count)"
+check "case 3: every agent window has 1 pane" "1" \
+  "$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_panes}' 2>/dev/null | sort -u | paste -sd' ' -)"
+mismatch=$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_name}|#{pane_title}' 2>/dev/null \
+           | awk -F'|' '$1!=$2' | count)
+check "case 3: window names == pane titles" "0" "$mismatch"
+
+# ---- case 4: plain window + manual split → ail 8 leaves both untouched ----
+
+plain_win=$(T new-window -d -t '=isengard:' -n plainwin -PF '#{window_id}' 'sleep 600')
+T split-window -d -t "$plain_win" 'sleep 600'
+plain_panes_before=$(T list-panes -t "$plain_win" -F '#{pane_id}' 2>/dev/null | sort | paste -sd' ' -)
+run_ail 8
+check "case 4: plain window survives ail 8" "plainwin" \
+  "$(T display-message -p -t "$plain_win" '#{window_name}' 2>/dev/null)"
+check "case 4: manual split intact (same pane ids)" "$plain_panes_before" \
+  "$(T list-panes -t "$plain_win" -F '#{pane_id}' 2>/dev/null | sort | paste -sd' ' -)"
+check "case 4: decks re-formed around it (sizes 8 8)" "8 8" "$(deck_sizes)"
+
+# ---- case 5: 10th agent under @ai_mode=8 → consumes a placeholder slot ----
+
+drive cc e2e-fake-10
+wait_until 50 agents_are 10
+check "case 5: 10th agent spawned" "10" "$(agent_panes | count)"
+wait_until 50 placeholders_are 6   # sizes stay 8 8 — the placeholder count is the signal
+check "case 5: auto-pack keeps the grid (sizes 8 8)" "8 8" "$(deck_sizes)"
+check "case 5: placeholder yielded its slot (7 → 6)" "6" "$(placeholder_panes | count)"
+check "case 5: still 2 decks (no third window)" "2" "$(agent_windows | count)"
+
+# ---- case 6: ais picker (fzf) in a driver pane; ^k kills e2e-side ONLY ----
+# Standing regression for the Phase 5 supervisor fix: pane ids (%N) collide
+# across servers — a picker bind running bare tmux would kill a DEFAULT-server
+# pane. Guard: the default server's pane-id SET taken right before ^k must
+# survive intact (superset-or-equal after; new panes may appear, none may go).
+
+if command -v fzf >/dev/null 2>&1; then
+  pass "case 6: fzf available for the interactive path"
+else
+  fail "case 6: fzf not installed — picker path cannot run"
+fi
+scr="$TMPROOT/drive-ais.zsh"
+cat > "$scr" <<EOF
+export HOME=${(q)REALHOME} AIL_SOCKET=${(q)SOCK} AI_SESSIONS_DIR=${(q)SESS}
+source ${(q)AI_SH}
+ai-status
+EOF
+typeset -g AISPANE
+AISPANE=$(T new-window -d -t '=driver:' -PF '#{pane_id}' "zsh -f ${(q)scr}")
+ais_shows() { T capture-pane -p -t "$AISPANE" 2>/dev/null | grep -qF -- "$1" }
+
+if wait_until 50 ais_shows 'enter attach'; then
+  pass "case 6: picker rendered (fzf header up)"
+else
+  fail "case 6: picker never rendered — capture: [$(T capture-pane -p -t "$AISPANE" 2>/dev/null | tail -n5)]"
+fi
+# 6 placeholders are live right now — the 10/10 counter doubles as the
+# "placeholders invisible to ais" assert (16 panes would read 16/16).
+check "case 6: precondition — 6 placeholders live while the picker runs" "6" \
+  "$(placeholder_panes | count)"
+if wait_until 50 ais_shows '10/10'; then
+  pass "case 6: 10 agent rows listed (10/10) — placeholders invisible"
+else
+  fail "case 6: match counter 10/10 never shown"
+fi
+if wait_until 50 ais_shows 'e2e-fake-'; then
+  pass "case 6: preview renders live pane content"
+else
+  fail "case 6: no fake-agent marker in preview — capture: [$(T capture-pane -p -t "$AISPANE" 2>/dev/null | grep -v '^ *$' | tail -n 20)]"
+fi
+
+typeset -g DEF_BEFORE E2E_BEFORE
+DEF_BEFORE=$(command tmux list-panes -a -F '#{pane_id}' 2>/dev/null | sort)
+E2E_BEFORE=$(agent_panes | sort)
+T send-keys -t "$AISPANE" C-k
+if wait_until 50 ais_shows 'y/N'; then
+  pass "case 6: ^k confirm prompt shown"
+else
+  fail "case 6: ^k confirm prompt never appeared"
+fi
+T send-keys -t "$AISPANE" y Enter
+wait_until 50 agents_are 9
+check "case 6: exactly one agent pane killed on the e2e server" "9" "$(agent_panes | count)"
+killed=$(comm -23 <(print -r -- "$E2E_BEFORE") <(agent_panes | sort) | paste -sd' ' -)
+check "case 6: e2e set-diff is exactly one pane" "1" "$(print -rl -- ${=killed} | count)"
+assert_panes_survive "case 6: default-server pane set intact (kill did not leak)" \
+  "$DEF_BEFORE" "$(command tmux list-panes -a -F '#{pane_id}' 2>/dev/null | sort)"
+# Exit the picker. NB: existence must be probed via list-panes — tmux 3.7b
+# display-message exits 0 with empty expansions for a dead (even never-
+# existent) pane-id target, so the ail-style `|| continue` idiom needs its
+# `[[ -z ]]` twin and a bare rc check would report dead panes as alive.
+ais_pane_gone() { ! T list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qxF "$AISPANE" }
+T send-keys -t "$AISPANE" Escape
+if wait_until 50 ais_pane_gone; then
+  pass "case 6: picker exited clean on Escape"
+else
+  fail "case 6: picker pane still alive after Escape — capture: [$(T capture-pane -p -t "$AISPANE" 2>/dev/null | grep -v '^ *$' | tail -n3 | tr '\n' '|')]"
+fi
+
+# ---- case 7: legacy adoption e2e — stamped session → isengard, pid+pipe live ----
+
+leg="cc-e2erepo-main-0704-150000-11111-2222"
+print -r -- "legacy log body" > "$LOGS/${leg}.log"
+lp=$(T new-session -d -s "$leg" -x 200 -y 50 -c "$REPO" -PF '#{pane_id}' 'sleep 600')
+T pipe-pane -o -t "$lp" "cat >> ${(q)LOGS}/${leg}.log"
+lp_pid=$(T display-message -p -t "$lp" '#{pane_pid}')
+out=$(in_test_env "ai-adopt; print -r -- rc=\$?")
+check_has "case 7: ai-adopt exits 0" "rc=0" "$out"
+check_has "case 7: reports one adoption" "adopted 1" "$out"
+if T has-session -t "=$leg" 2>/dev/null; then
+  fail "case 7: legacy session still exists"
+else
+  pass "case 7: legacy session gone"
+fi
+check "case 7: pane now lives in isengard" "isengard" \
+  "$(T display-message -p -t "$lp" '#{session_name}' 2>/dev/null)"
+check "case 7: SAME pane_pid across the move" "$lp_pid" \
+  "$(T display-message -p -t "$lp" '#{pane_pid}' 2>/dev/null)"
+if kill -0 "$lp_pid" 2>/dev/null; then
+  pass "case 7: agent process alive across the move"
+else
+  fail "case 7: agent process [$lp_pid] died"
+fi
+check "case 7: pipe-pane NOT re-wired (pane_pipe still 1)" "1" \
+  "$(T display-message -p -t "$lp" '#{pane_pipe}' 2>/dev/null)"
+check "case 7: @ai_agent tagged from name prefix" "cc" \
+  "$(T display-message -p -t "$lp" '#{@ai_agent}' 2>/dev/null)"
+check "case 7: @ai_log resolved to the exact log" "$LOGS/${leg}.log" \
+  "$(T display-message -p -t "$lp" '#{@ai_log}' 2>/dev/null)"
+check "case 7: pane title short-style from live git state" "cc:e2erepo/main" \
+  "$(T display-message -p -t "$lp" '#{pane_title}' 2>/dev/null)"
+wait_until 50 grid_is "8 8" 6
+check "case 7: adoptee auto-packed under mode 8 (sizes 8 8)" "8 8" "$(deck_sizes)"
+check "case 7: tail deck re-padded to 6 placeholders" "6" "$(placeholder_panes | count)"
+
+# ---- case 8: ceiling backstop — rendered status strings leak no raw #{ ----
+# The real conf is loaded on this server; #{T:...} renders the option as the
+# status line would (a ##{ mistake outside #() renders as literal #{ — caught;
+# #() bodies are consumed whole by the job machinery, never rendered raw).
+
+rendered_left=$(T display-message -p -t '=isengard:' '#{T:status-left}' 2>/dev/null)
+rendered_right=$(T display-message -p -t '=isengard:' '#{T:status-right}' 2>/dev/null)
+check_has "case 8: status-left actually expanded (session name)" "isengard" "$rendered_left"
+check_has "case 8: status-left mode segment expanded (8-up)" "8-up" "$rendered_left"
+check_has "case 8: status-right actually expanded (agents label)" "agents" "$rendered_right"
+assert_no_brace_leak "case 8: rendered status-left has no raw #{ artifacts" "$rendered_left"
+assert_no_brace_leak "case 8: rendered status-right has no raw #{ artifacts" "$rendered_right"
+
+# ---- case 9: full regression — the four standing unit smokes stay green ----
+# env -u strips this run's seams so each smoke uses its own socket/defaults.
+
+typeset -g rout
+for s in ail-smoke ai-run-smoke tmux-conf-smoke ais-smoke; do
+  rout="$TMPROOT/reg-$s.out"
+  if env -u AIL_SOCKET -u AI_SH -u AIL -u AIS_FILE -u CONF -u AI_SESSIONS_DIR \
+       "$HOME/.local/bin/$s" > "$rout" 2>&1; then
+    pass "case 9: $s green ($(grep -c '^PASS' "$rout") checks)"
+  else
+    fail "case 9: $s FAILED — tail: $(tail -n 6 "$rout" | tr '\n' ' | ')"
+  fi
+done
+
+# ---- case 0 (close): default server untouched (read-only compare) ----
+# (contract case 10 — real agents + Termius + G9 — is Fred's manual test.)
+
+check "case 0: default-server session list byte-identical" \
+  "$DEFAULT_BEFORE" "$(command tmux ls -F '#{session_name}' 2>/dev/null)"
+
+# ---- summary ----
+
+print -r -- "----"
+if (( fails > 0 )); then
+  print -r -- "isengard-smoke: $fails check(s) FAILED"
+  exit 1
+fi
+print -r -- "isengard-smoke: all checks passed"
