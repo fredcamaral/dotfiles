@@ -1,0 +1,11 @@
+{
+  "allowedRoots": [
+    {
+      "hostPath": "/Users/fredamaral/repos",
+      "containerPath": "/mnt/repos",
+      "readOnly": false
+    }
+  ],
+  "blockedPatterns": [],
+  "nonMainReadOnly": true
+}

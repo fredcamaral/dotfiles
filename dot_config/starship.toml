@@ -1,212 +1,206 @@
 "$schema" = 'https://starship.rs/config-schema.json'
 
 format = """
-[](red)\
+[](surface1)\
 $username\
-[](bg:peach fg:red)\
+[](bg:surface0 fg:surface1)\
 $directory\
-[](bg:yellow fg:peach)\
+[](bg:overlay0 fg:surface0)\
 $git_branch\
 $git_status\
-[ ](fg:lavender)\
+[ ](fg:overlay0)\
 $cmd_duration\
 $fill\
 $time\
 $line_break
 $character"""
 
-palette = 'catppuccin_mocha'
+palette = 'monochrome-light'
 
 [os]
 disabled = false
-style = "bg:red fg:crust"
+style = "bg:surface1 fg:text"
 
 [os.symbols]
-Windows = ""
+Windows = ""
 Ubuntu = "󰕈"
-SUSE = ""
+SUSE = ""
 Raspbian = "󰐿"
 Mint = "󰣭"
 Macos = "󰀵"
-Manjaro = ""
+Manjaro = ""
 Linux = "󰌽"
 Gentoo = "󰣨"
 Fedora = "󰣛"
-Alpine = ""
-Amazon = ""
-Android = ""
+Alpine = ""
+Amazon = ""
+Android = ""
 Arch = "󰣇"
 Artix = "󰣇"
-CentOS = ""
+CentOS = ""
 Debian = "󰣚"
 Redhat = "󱄛"
 RedHatEnterprise = "󱄛"
 
 [username]
 show_always = true
-style_user = "bg:red fg:crust"
-style_root = "bg:red fg:crust"
-format = '[ $user]($style)'
+style_user = "bg:surface1 fg:text"
+style_root = "bg:surface1 fg:bright"
+format = '[ $user ]($style)'
 
 [hostname]
 ssh_only = false
-style = "bg:red fg:crust"
+style = "bg:surface1 fg:text"
 format = '[@$hostname]($style)'
 
 [directory]
-style = "bg:peach fg:crust"
+style = "bg:surface0 fg:text"
 format = "[ $path ]($style)"
-truncation_length = 1
+truncation_length = 2
 truncation_symbol = "…/"
-truncate_to_repo = false
+truncate_to_repo = true
 
 [directory.substitutions]
 "Documents" = "󰈙 "
-"Downloads" = " "
+"Downloads" = " "
 "Music" = "󰝚 "
-"Pictures" = " "
-"Developer" = "󰲋 "
+"Pictures" = " "
+"repos" = "󰲋 "
 
 [git_branch]
-symbol = ""
-style = "bg:yellow"
-format = '[[ $symbol $branch ](fg:crust bg:yellow)]($style)'
+symbol = ""
+style = "bg:overlay0"
+format = '[[ $symbol $branch ](fg:base bg:overlay0)]($style)'
 
 [git_status]
-style = "bg:yellow"
-format = '[[($all_status$ahead_behind )](fg:crust bg:yellow)]($style)'
+style = "bg:overlay0"
+format = '[[($all_status$ahead_behind )](fg:base bg:overlay0)]($style)'
 
 [package]
 disabled = false
 symbol = "📦 "
-style = "bg:green fg:crust"
-format = '[[ $symbol$version ](bg:green fg:crust)]($style)'
+style = "bg:surface2 fg:base"
+format = '[[ $symbol$version ](bg:surface2 fg:base)]($style)'
 
 [status]
 disabled = false
-format = '[[\[$status\] ](bg:red fg:crust)]($style)'
-style = "bg:red fg:crust"
+format = '[[\[$status\] ](bg:bright fg:base)]($style)'
+style = "bg:bright fg:base"
 
 [jobs]
 disabled = false
 symbol = "✦ "
 number_threshold = 1
-format = '[[$symbol$number ](bg:blue fg:crust)]($style)'
-style = "bg:blue fg:crust"
+format = '[[$symbol$number ](bg:surface2 fg:text)]($style)'
+style = "bg:surface2 fg:text"
 
 [nodejs]
-symbol = ""
-style = "bg:green"
-format = '[[ $symbol( $version) ](fg:crust bg:green)]($style)'
+symbol = ""
+style = "bg:surface2"
+format = '[[ $symbol( $version) ](fg:text bg:surface2)]($style)'
 
 [c]
-symbol = " "
-style = "bg:green"
-format = '[[ $symbol( $version) ](fg:crust bg:green)]($style)'
+symbol = " "
+style = "bg:surface2"
+format = '[[ $symbol( $version) ](fg:text bg:surface2)]($style)'
 
 [rust]
-symbol = ""
-style = "bg:green"
-format = '[[ $symbol( $version) ](fg:crust bg:green)]($style)'
+symbol = ""
+style = "bg:surface2"
+format = '[[ $symbol( $version) ](fg:text bg:surface2)]($style)'
 
 [golang]
-symbol = ""
-style = "bg:green"
-format = '[[ $symbol( $version) ](fg:crust bg:green)]($style)'
+symbol = ""
+style = "bg:surface2"
+format = '[[ $symbol( $version) ](fg:text bg:surface2)]($style)'
 
 [php]
-symbol = ""
-style = "bg:green"
-format = '[[ $symbol( $version) ](fg:crust bg:green)]($style)'
+symbol = ""
+style = "bg:surface2"
+format = '[[ $symbol( $version) ](fg:text bg:surface2)]($style)'
 
 [java]
-symbol = " "
-style = "bg:green"
-format = '[[ $symbol( $version) ](fg:crust bg:green)]($style)'
+symbol = " "
+style = "bg:surface2"
+format = '[[ $symbol( $version) ](fg:text bg:surface2)]($style)'
 
 [kotlin]
-symbol = ""
-style = "bg:green"
-format = '[[ $symbol( $version) ](fg:crust bg:green)]($style)'
+symbol = ""
+style = "bg:surface2"
+format = '[[ $symbol( $version) ](fg:text bg:surface2)]($style)'
 
 [haskell]
-symbol = ""
-style = "bg:green"
-format = '[[ $symbol( $version) ](fg:crust bg:green)]($style)'
+symbol = ""
+style = "bg:surface2"
+format = '[[ $symbol( $version) ](fg:text bg:surface2)]($style)'
 
 [python]
-symbol = ""
-style = "bg:green"
-format = '[[ $symbol( $version)(\(#$virtualenv\)) ](fg:crust bg:green)]($style)'
+symbol = ""
+style = "bg:surface2"
+format = '[[ $symbol( $version)(\(#$virtualenv\)) ](fg:text bg:surface2)]($style)'
 
 [docker_context]
-symbol = ""
-style = "bg:sapphire"
-format = '[[ $symbol( $context) ](fg:crust bg:sapphire)]($style)'
+symbol = ""
+style = "bg:surface1"
+format = '[[ $symbol( $context) ](fg:text bg:surface1)]($style)'
 
 [conda]
-symbol = "  "
-style = "fg:crust bg:sapphire"
+symbol = "  "
+style = "fg:text bg:surface1"
 format = '[$symbol$environment ]($style)'
 ignore_base = false
 
 [time]
 disabled = false
 time_format = "%R"
-style = "bg:lavender"
-format = '[[  $time ](fg:crust bg:lavender)]($style)     '
+style = "bg:surface1"
+format = ' [[ $time ](fg:text bg:surface1)]($style)'
 
 [line_break]
 disabled = false
 
 [fill]
 symbol = "·"
-style = "bold black"
+style = "bold dim"
 
 [character]
 disabled = false
-success_symbol = '[  ❯](bold fg:green)'
-error_symbol = '[  ❯](bold fg:red)'
-vimcmd_symbol = '[  ❮](bold fg:green)'
-vimcmd_replace_one_symbol = '[  ❮](bold fg:lavender)'
-vimcmd_replace_symbol = '[  ❮](bold fg:lavender)'
-vimcmd_visual_symbol = '[  ❮](bold fg:yellow)'
+success_symbol = '[  ❯](bold fg:text)'
+error_symbol = '[  ❯](bold fg:bright)'
+vimcmd_symbol = '[  ❮](bold fg:text)'
+vimcmd_replace_one_symbol = '[  ❮](bold fg:dim)'
+vimcmd_replace_symbol = '[  ❮](bold fg:dim)'
+vimcmd_visual_symbol = '[  ❮](bold fg:overlay1)'
 
 [cmd_duration]
 show_milliseconds = false
-format = " in $duration "
-style = "bg:lavender"
+format = " in $duration "
+style = "fg:dim"
 disabled = false
-show_notifications = true
+show_notifications = false
 min_time_to_notify = 45000
 
-[palettes.catppuccin_mocha]
-rosewater = "#f5e0dc"
-flamingo = "#f2cdcd"
-pink = "#f5c2e7"
-mauve = "#cba6f7"
-red = "#f38ba8"
-maroon = "#eba0ac"
-peach = "#fab387"
-yellow = "#f9e2af"
-green = "#a6e3a1"
-teal = "#94e2d5"
-sky = "#89dceb"
-sapphire = "#74c7ec"
-blue = "#89b4fa"
-lavender = "#b4befe"
-text = "#cdd6f4"
-subtext1 = "#bac2de"
-subtext0 = "#a6adc8"
-overlay2 = "#9399b2"
-overlay1 = "#7f849c"
-overlay0 = "#6c7086"
-surface2 = "#585b70"
-surface1 = "#45475a"
-surface0 = "#313244"
-base = "#1e1e2e"
-mantle = "#181825"
-crust = "#11111b"
+[palettes.monochrome]
+# Pure monochrome palette - black/grey/white spectrum (DARK MODE)
+bright = "#ffffff"      # Pure white - for emphasis/errors
+text = "#c0c0c0"        # Light grey - main text
+dim = "#808080"         # Medium grey - secondary info
+overlay1 = "#6a6a6a"    # Grey
+overlay0 = "#555555"    # Darker grey
+surface2 = "#444444"    # Dark grey
+surface1 = "#333333"    # Darker
+surface0 = "#262626"    # Very dark grey
+base = "#1a1a1a"        # Near black - background
 
-# Additional palettes available at: https://github.com/catppuccin/starship
-# Uncomment the palette you want to use and update `palette = 'catppuccin_...'` above
+[palettes.monochrome-light]
+# Inverted monochrome palette for LIGHT MODE terminals
+# Note: 'base' stays dark because it's used as fg: for segment text
+bright = "#c41a1a"      # Red-tinted dark - for errors (visible on light)
+text = "#3a3a3a"        # Dark grey - main text (readable on light bg)
+dim = "#707070"         # Medium grey - secondary info
+overlay1 = "#909090"    # Light grey
+overlay0 = "#b8b8b8"    # Light grey - git segment bg
+surface2 = "#c8c8c8"    # Very light grey
+surface1 = "#d8d8d8"    # Lightest segment bg
+surface0 = "#e0e0e0"    # Near white - directory bg
+base = "#2a2a2a"        # Dark - used as text inside segments (fg:base)

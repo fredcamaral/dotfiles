@@ -1,146 +1,52 @@
-# Yazi configuration - compatible with v0.4+
-# Schema: https://yazi-rs.github.io/schemas/yazi.json
-"$schema" = "https://yazi-rs.github.io/schemas/yazi.json"
-
 [mgr]
-ratio = [1, 4, 3]
-sort_by = "alphabetical"
+ratio = [1, 3, 4]
+sort_by = "natural"
 sort_sensitive = false
 sort_reverse = false
 sort_dir_first = true
-sort_translit = false
+sort_translit = true
 linemode = "size"
 show_hidden = true
 show_symlink = true
-scrolloff = 5
-mouse_events = ["click", "scroll"]
-title_format = "Yazi: {cwd}"
 
 [preview]
-wrap = "no"
+wrap = "yes"
 tab_size = 2
-max_width = 600
-max_height = 900
-cache_dir = ""
-image_delay = 30
-image_filter = "triangle"
-image_quality = 75
-ueberzug_scale = 1
-ueberzug_offset = [0, 0, 0, 0]
-
-[opener]
-edit = [
-  { run = '${EDITOR:-nvim} "$@"', desc = "$EDITOR", block = true, for = "unix" },
-]
-open = [
-  { run = 'open "$@"', desc = "Open", for = "macos" },
-]
-reveal = [
-  { run = 'open -R "$1"', desc = "Reveal", for = "macos" },
-]
-extract = [
-  { run = 'ya pub extract --list "$@"', desc = "Extract here", for = "unix" },
-]
-play = [
-  { run = 'mpv --force-window "$@"', orphan = true, for = "unix" },
-]
-
-[open]
-rules = [
-  { name = "*/", use = ["edit", "open", "reveal"] },
-  { mime = "text/*", use = ["edit", "reveal"] },
-  { mime = "image/*", use = ["open", "reveal"] },
-  { mime = "{audio,video}/*", use = ["play", "reveal"] },
-  { mime = "application/{zip,rar,7z*,tar,gzip,xz,zstd,bzip*,lzma,compress,archive,cpio,arj,xar,ms-cab*}", use = ["extract", "reveal"] },
-  { mime = "application/{json,ndjson}", use = ["edit", "reveal"] },
-  { mime = "*/javascript", use = ["edit", "reveal"] },
-  { mime = "inode/empty", use = ["edit", "reveal"] },
-  { name = "*", use = ["open", "reveal"] },
-]
-
-[tasks]
-micro_workers = 10
-macro_workers = 10
-bizarre_retry = 3
-image_alloc = 536870912
-image_bound = [5000, 5000]
-suppress_preload = false
+max_width = 1600
+max_height = 1600
+image_delay = 20
+image_filter = "lanczos3"
+image_quality = 85
 
 [plugin]
-fetchers = [
-  { id = "mime", name = "*", run = "mime", prio = "high" },
-]
-spotters = [
-  { name = "*/", run = "folder" },
-  { mime = "text/*", run = "code" },
-  { mime = "image/*", run = "image" },
-  { mime = "video/*", run = "video" },
-  { name = "*", run = "file" },
-]
-preloaders = [
-  { mime = "image/*", run = "image" },
-  { mime = "video/*", run = "video" },
-  { mime = "application/pdf", run = "pdf" },
-]
-previewers = [
-  { name = "*/", run = "folder" },
-  { mime = "text/*", run = "code" },
-  { mime = "application/{json,ndjson}", run = "json" },
-  { mime = "image/*", run = "image" },
-  { mime = "video/*", run = "video" },
-  { mime = "application/pdf", run = "pdf" },
-  { mime = "application/{zip,rar,7z*,tar,gzip,xz,zstd,bzip*,lzma,compress,archive,cpio,arj,xar,ms-cab*}", run = "archive" },
-  { mime = "inode/empty", run = "empty" },
-  { name = "*", run = "file" },
+prepend_fetchers = [
+	# Git status badges
+	{ url = "*",  run = "git", group = "git" },
+	{ url = "*/", run = "git", group = "git" },
+	# macOS Finder tags (no `id` needed on Yazi > v26.1.22)
+	{ url = "*",  run = "mactag", group = "mactag" },
+	{ url = "*/", run = "mactag", group = "mactag" },
+	# Faster MIME detection by extension
+	{ url = "local://*",  run = "mime-ext.local",  prio = "high", group = "mime" },
+	{ url = "remote://*", run = "mime-ext.remote", prio = "high", group = "mime" },
 ]
 
-[input]
-cursor_blink = false
-cd_title = "Change directory:"
-cd_origin = "top-center"
-cd_offset = [0, 2, 50, 3]
-create_title = ["Create:", "Create (dir):"]
-create_origin = "top-center"
-create_offset = [0, 2, 50, 3]
-rename_title = "Rename:"
-rename_origin = "hovered"
-rename_offset = [0, 1, 50, 3]
-filter_title = "Filter:"
-filter_origin = "top-center"
-filter_offset = [0, 2, 50, 3]
-find_title = ["Find next:", "Find previous:"]
-find_origin = "top-center"
-find_offset = [0, 2, 50, 3]
-search_title = "Search via {n}:"
-search_origin = "top-center"
-search_offset = [0, 2, 50, 3]
-shell_title = ["Shell:", "Shell (block):"]
-shell_origin = "top-center"
-shell_offset = [0, 2, 50, 3]
+prepend_previewers = [
+	# Specific rules first; the generic dir/binary rules come last
+	{ url = "*.md", run = 'piper -- CLICOLOR_FORCE=1 glow -s dark -w "$w" "$1"' },
+	{ url = "*.svg", run = 'piper -- chafa -f symbols -s "${w}x${h}" "$1"' },
+	{ url = "*.{csv,tsv}", run = 'piper -- bat -p --color=always "$1"' },
+	{ url = "*.{db,sqlite,sqlite3}", run = 'piper -- sqlite3 "$1" .schema' },
+	{ mime = "application/{*zip,tar,bzip2,7z*,rar,xz,zstd,java-archive}", run = "ouch" },
+	# Hex view only for unknown binaries — placed before the dir rule, never clobbers images
+	{ mime = "application/octet-stream", run = 'piper -- hexyl --border=none "$1"' },
+	{ url = "*/", run = "eza-preview" },
+]
 
-[confirm]
-trash_title = "Trash {n} selected file{s}?"
-trash_origin = "center"
-trash_offset = [0, 0, 70, 20]
-delete_title = "Permanently delete {n} selected file{s}?"
-delete_origin = "center"
-delete_offset = [0, 0, 70, 20]
-overwrite_title = "Overwrite file?"
-overwrite_content = "Will overwrite the following file:"
-overwrite_origin = "center"
-overwrite_offset = [0, 0, 50, 15]
-quit_title = "Quit?"
-quit_content = "The following tasks are still running, are you sure you want to quit?"
-quit_origin = "center"
-quit_offset = [0, 0, 50, 15]
-
-[pick]
-open_title = "Open with:"
-open_origin = "hovered"
-open_offset = [0, 1, 50, 7]
-
-[which]
-sort_by = "none"
-sort_sensitive = false
-sort_reverse = false
-sort_translit = false
+# Override only the `edit` opener -> micro. Openers merge by key, so the default
+# open/play/extract/reveal openers stay intact. $EDITOR (nvim) is untouched, so
+# git commits and the `E` keymap still use nvim.
+[opener]
+edit = [
+	{ run = 'micro "$@"', desc = "micro", block = true, for = "unix" },
+]

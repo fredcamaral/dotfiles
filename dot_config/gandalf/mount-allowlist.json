@@ -1,0 +1,16 @@
+{
+  "allowedRoots": [
+    {
+      "hostPath": "/Users/fredamaral",
+      "containerPath": "/Users/fredamaral",
+      "readOnly": false
+    }
+  ],
+  "blockedPatterns": [
+    "**/.env",
+    "**/.ssh/**",
+    "**/.gnupg/**",
+    "**/.aws/**"
+  ],
+  "nonMainReadOnly": true
+}

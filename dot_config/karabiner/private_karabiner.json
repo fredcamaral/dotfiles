@@ -1,23 +1,297 @@
 {
+    "global": {
+        "show_in_menu_bar": false
+    },
     "profiles": [
         {
             "complex_modifications": {
                 "rules": [
                     {
+                        "description": "Change caps_lock to command+control+option+shift.",
                         "manipulators": [
                             {
                                 "description": "Change caps_lock to command+control+option+shift.",
                                 "from": {
                                     "key_code": "caps_lock",
-                                    "modifiers": { "optional": ["any"] }
+                                    "modifiers": {
+                                        "optional": [
+                                            "any"
+                                        ]
+                                    }
                                 },
                                 "to": [
                                     {
                                         "key_code": "left_shift",
-                                        "modifiers": ["left_command", "left_control", "left_option"]
+                                        "modifiers": [
+                                            "left_command",
+                                            "left_control",
+                                            "left_option"
+                                        ]
                                     }
                                 ],
                                 "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "description": "Hyper + arrows → Function keys (Ghostty pane navigation)",
+                        "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "bundle_identifiers": [
+                                            "com.mitchellh.ghostty"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "left_arrow",
+                                    "modifiers": {
+                                        "mandatory": [
+                                            "command",
+                                            "control",
+                                            "option",
+                                            "shift"
+                                        ]
+                                    }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "f14",
+                                        "modifiers": [
+                                            "shift"
+                                        ]
+                                    }
+                                ],
+                                "type": "basic"
+                            },
+                            {
+                                "conditions": [
+                                    {
+                                        "bundle_identifiers": [
+                                            "com.mitchellh.ghostty"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "right_arrow",
+                                    "modifiers": {
+                                        "mandatory": [
+                                            "command",
+                                            "control",
+                                            "option",
+                                            "shift"
+                                        ]
+                                    }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "f15",
+                                        "modifiers": [
+                                            "shift"
+                                        ]
+                                    }
+                                ],
+                                "type": "basic"
+                            },
+                            {
+                                "conditions": [
+                                    {
+                                        "bundle_identifiers": [
+                                            "com.mitchellh.ghostty"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "up_arrow",
+                                    "modifiers": {
+                                        "mandatory": [
+                                            "command",
+                                            "control",
+                                            "option",
+                                            "shift"
+                                        ]
+                                    }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "f16",
+                                        "modifiers": [
+                                            "shift"
+                                        ]
+                                    }
+                                ],
+                                "type": "basic"
+                            },
+                            {
+                                "conditions": [
+                                    {
+                                        "bundle_identifiers": [
+                                            "com.mitchellh.ghostty"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "down_arrow",
+                                    "modifiers": {
+                                        "mandatory": [
+                                            "command",
+                                            "control",
+                                            "option",
+                                            "shift"
+                                        ]
+                                    }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "f17",
+                                        "modifiers": [
+                                            "shift"
+                                        ]
+                                    }
+                                ],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "description": "Ghostty: Caps+6 → eight even columns (7x cmd+d new_split:right, then equalize)",
+                        "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "bundle_identifiers": [
+                                            "com.mitchellh.ghostty"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "8",
+                                    "modifiers": {
+                                        "mandatory": [
+                                            "command",
+                                            "control",
+                                            "option",
+                                            "shift"
+                                        ]
+                                    }
+                                },
+                                "parameters": {
+                                    "to_delay_after_key_up_milliseconds": 5
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "d",
+                                        "modifiers": [
+                                            "left_command"
+                                        ]
+                                    },
+                                    {
+                                        "key_code": "d",
+                                        "modifiers": [
+                                            "left_command"
+                                        ]
+                                    },
+                                    {
+                                        "key_code": "d",
+                                        "modifiers": [
+                                            "left_command"
+                                        ]
+                                    },
+                                    {
+                                        "key_code": "d",
+                                        "modifiers": [
+                                            "left_command"
+                                        ]
+                                    },
+                                    {
+                                        "key_code": "d",
+                                        "modifiers": [
+                                            "left_command"
+                                        ]
+                                    },
+                                    {
+                                        "key_code": "d",
+                                        "modifiers": [
+                                            "left_command"
+                                        ]
+                                    },
+                                    {
+                                        "key_code": "d",
+                                        "modifiers": [
+                                            "left_command"
+                                        ]
+                                    },
+                                    {
+                                        "key_code": "equal_sign",
+                                        "modifiers": [
+                                            "left_command",
+                                            "left_control"
+                                        ]
+                                    }
+                                ],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "manipulators": [
+                            {
+                                "description": "Right Option to Ctrl+A (tmux prefix)",
+                                "from": {
+                                    "key_code": "right_option",
+                                    "modifiers": {
+                                        "optional": [
+                                            "any"
+                                        ]
+                                    }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "a",
+                                        "modifiers": [
+                                            "left_control"
+                                        ]
+                                    }
+                                ],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "description": "DJI Mic 2 button (volume_increment) → right_control for Wispr (device-scoped; keyboard volume up preserved)",
+                        "manipulators": [
+                            {
+                                "type": "basic",
+                                "from": {
+                                    "consumer_key_code": "volume_increment",
+                                    "modifiers": {
+                                        "optional": [
+                                            "any"
+                                        ]
+                                    }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "right_control"
+                                    }
+                                ],
+                                "conditions": [
+                                    {
+                                        "type": "device_if",
+                                        "identifiers": [
+                                            {
+                                                "vendor_id": 11427,
+                                                "product_id": 45069
+                                            }
+                                        ]
+                                    }
+                                ]
                             }
                         ]
                     }
@@ -32,11 +306,42 @@
                         "vendor_id": 13364
                     },
                     "ignore": false
+                },
+                {
+                    "identifiers": {
+                        "is_game_pad": true,
+                        "is_keyboard": true,
+                        "is_pointing_device": true,
+                        "product_id": 2832,
+                        "vendor_id": 13364
+                    },
+                    "ignore": false
+                },
+                {
+                    "identifiers": {
+                        "is_keyboard": true,
+                        "is_pointing_device": true,
+                        "product_id": 2832,
+                        "vendor_id": 13364
+                    },
+                    "ignore": false,
+                    "ignore_vendor_events": true
+                },
+                {
+                    "identifiers": {
+                        "is_consumer": true,
+                        "product_id": 45069,
+                        "vendor_id": 11427
+                    },
+                    "ignore": false,
+                    "ignore_vendor_events": true
                 }
             ],
             "name": "Default profile",
             "selected": true,
-            "virtual_hid_keyboard": { "keyboard_type_v2": "ansi" }
+            "virtual_hid_keyboard": {
+                "keyboard_type_v2": "ansi"
+            }
         }
     ]
 }

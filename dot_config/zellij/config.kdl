@@ -1,6 +1,6 @@
 keybinds clear-defaults=true {
     locked {
-        bind "Ctrl g" { SwitchToMode "normal"; }
+        bind "Ctrl \\" { SwitchToMode "normal"; }
     }
     pane {
         bind "left" { MoveFocus "left"; }
@@ -85,16 +85,12 @@ keybinds clear-defaults=true {
         bind "tab" { MovePane; }
     }
     scroll {
-        bind "Alt left" { MoveFocusOrTab "left"; SwitchToMode "locked"; }
-        bind "Alt down" { MoveFocus "down"; SwitchToMode "locked"; }
-        bind "Alt up" { MoveFocus "up"; SwitchToMode "locked"; }
-        bind "Alt right" { MoveFocusOrTab "right"; SwitchToMode "locked"; }
+        bind "Ctrl Alt Left" { MoveFocusOrTab "left"; SwitchToMode "locked"; }
+        bind "Ctrl Alt Down" { MoveFocus "down"; SwitchToMode "locked"; }
+        bind "Ctrl Alt Up" { MoveFocus "up"; SwitchToMode "locked"; }
+        bind "Ctrl Alt Right" { MoveFocusOrTab "right"; SwitchToMode "locked"; }
         bind "e" { EditScrollback; SwitchToMode "locked"; }
         bind "f" { SwitchToMode "entersearch"; SearchInput 0; }
-        bind "Alt h" { MoveFocusOrTab "left"; SwitchToMode "locked"; }
-        bind "Alt j" { MoveFocus "down"; SwitchToMode "locked"; }
-        bind "Alt k" { MoveFocus "up"; SwitchToMode "locked"; }
-        bind "Alt l" { MoveFocusOrTab "right"; SwitchToMode "locked"; }
         bind "s" { SwitchToMode "normal"; }
     }
     search {
@@ -137,33 +133,76 @@ keybinds clear-defaults=true {
         }
     }
     shared_among "normal" "locked" {
-        bind "Alt left" { MoveFocusOrTab "left"; }
-        bind "Alt down" { MoveFocus "down"; }
-        bind "Alt up" { MoveFocus "up"; }
-        bind "Alt right" { MoveFocusOrTab "right"; }
-        bind "Alt +" { Resize "Increase"; }
-        bind "Alt -" { Resize "Decrease"; }
-        bind "Alt =" { Resize "Increase"; }
-        bind "Alt [" { PreviousSwapLayout; }
-        bind "Alt ]" { NextSwapLayout; }
-        bind "Alt f" { ToggleFloatingPanes; }
-        bind "Alt h" { MoveFocusOrTab "left"; }
-        bind "Alt i" { MoveTab "left"; }
-        bind "Alt j" { MoveFocus "down"; }
-        bind "Alt k" { MoveFocus "up"; }
-        bind "Alt l" { MoveFocusOrTab "right"; }
-        bind "Alt n" { NewPane; }
-        bind "Alt o" { MoveTab "right"; }
-        bind "Alt s" {
+        // Hyper key (Ctrl Alt) navigation - pane focus
+        bind "Ctrl Alt Left" { MoveFocusOrTab "left"; }
+        bind "Ctrl Alt Down" { MoveFocus "down"; }
+        bind "Ctrl Alt Up" { MoveFocus "up"; }
+        bind "Ctrl Alt Right" { MoveFocusOrTab "right"; }
+        // Hyper key - pane management
+        bind "Ctrl Alt n" { NewPane; }
+        bind "Ctrl Alt r" { NewPane "right"; }  // Split horizontally (new pane on right)
+        bind "Ctrl Alt d" { NewPane "down"; }   // Split vertically (new pane below)
+        bind "Ctrl Alt t" { NewTab; }
+        bind "Ctrl Alt w" { CloseFocus; }
+        bind "Ctrl Alt f" { ToggleFloatingPanes; }
+        bind "Ctrl Alt z" { ToggleFocusFullscreen; }
+        // Hyper key - tab navigation
+        bind "Ctrl Alt [" { GoToPreviousTab; }
+        bind "Ctrl Alt ]" { GoToNextTab; }
+        bind "Ctrl Alt 1" { GoToTab 1; }
+        bind "Ctrl Alt 2" { GoToTab 2; }
+        bind "Ctrl Alt 3" { GoToTab 3; }
+        bind "Ctrl Alt 4" { GoToTab 4; }
+        bind "Ctrl Alt 5" { GoToTab 5; }
+        bind "Ctrl Alt 6" { GoToTab 6; }
+        bind "Ctrl Alt 7" { GoToTab 7; }
+        bind "Ctrl Alt 8" { GoToTab 8; }
+        bind "Ctrl Alt 9" { GoToTab 9; }
+        // Hyper key - session manager
+        bind "Ctrl Alt s" {
             LaunchOrFocusPlugin "session-manager" {
                 floating true
                 move_to_focused_tab true
             }
         }
-        bind "Alt z" { ToggleFocusFullscreen; }
+        // Hyper key - plugins
+        bind "Ctrl Alt e" {
+            LaunchOrFocusPlugin "strider" {
+                floating true
+                move_to_focused_tab true
+            }
+        }
+        bind "Ctrl Alt p" {
+            LaunchOrFocusPlugin "plugin-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+        }
+        bind "Ctrl Alt ," {
+            LaunchOrFocusPlugin "configuration" {
+                floating true
+                move_to_focused_tab true
+            }
+        }
+        // Hyper key - resize
+        bind "Ctrl Alt +" { Resize "Increase"; }
+        bind "Ctrl Alt -" { Resize "Decrease"; }
+        bind "Ctrl Alt =" { Resize "Increase"; }
+        // Hyper key - move tab position
+        bind "Ctrl Alt i" { MoveTab "left"; }
+        bind "Ctrl Alt o" { MoveTab "right"; }
+        // Hyper key - quit
+        bind "Ctrl Alt q" { Quit; }
+        // Hyper key - plugins
+        bind "Ctrl Alt /" {
+            LaunchOrFocusPlugin "zellij-forgot" {
+                floating true
+                move_to_focused_tab true
+            }
+        }
     }
     shared_except "locked" "renametab" "renamepane" {
-        bind "Ctrl g" { SwitchToMode "locked"; }
+        bind "Ctrl \\" { SwitchToMode "locked"; }
         bind "Ctrl q" { Quit; }
     }
     shared_except "locked" "entersearch" {
@@ -237,6 +276,9 @@ plugins {
     status-bar location="zellij:status-bar"
     strider location="zellij:strider"
     tab-bar location="zellij:tab-bar"
+    // Community plugins
+    zjstatus location="https://github.com/dj95/zjstatus/releases/latest/download/zjstatus.wasm"
+    zellij-forgot location="https://github.com/karimould/zellij-forgot/releases/latest/download/zellij_forgot.wasm"
 }
 
 // Plugins to load in the background when a new session starts
@@ -255,7 +297,7 @@ load_plugins {
 // Choose the theme that is specified in the themes section.
 // Default: default
 // 
-theme "catppuccin-mocha"
+theme "tokyo-night"
  
 // Choose the base input mode of zellij.
 // Default: normal
@@ -294,6 +336,9 @@ default_shell "zsh"
 //   - false
 // 
 // mouse_mode false
+
+// Focus pane when hovering with mouse
+pane_focus_follows_mouse true
  
 // Toggle having pane frames around the panes
 // Options:
@@ -436,3 +481,6 @@ show_startup_tips false
 // Default: true
 // 
 show_release_notes false
+
+// Prevent programs from overriding pane names
+pane_name_disallow_override true

@@ -84,8 +84,7 @@ providers:
         timeout: 60s
         top_p: 1
     openai:
-        # Uses OPENAI_API_KEY from ~/.config/envvars/api_keys.env
-        api_key: ""
+        api_key: encrypted:Wl0676R2ZFp/ZVbXPT6lJdWt81fhXZMlUZBy6jE+2M6aSsn6vk8J9npjMW9yClkuKNLediGtlbAtzzZUmkEGTPot+rD3zLeNW1dJsgtTDRLf6eOQ8SPGAAi8CxguTMdmwAmMW+QpBuoL45ACrV8nTcR9jiLUXz4+mUjQimwEL3QLmsUKPpgkan5jcqxQX0gU3BUUnAfOa6aTVrSyE0QpZR+ot/GNryALN9Nwxy1I/qoibi56h+xsr+rcUnEc2+X+
         base_url: https://api.openai.com/v1
         custom_prompt: ""
         features:

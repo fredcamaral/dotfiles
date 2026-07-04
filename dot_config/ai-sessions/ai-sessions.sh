@@ -1,0 +1,675 @@
+#!/usr/bin/env zsh
+# ai-sessions: tmux launcher + pipe-pane logging for Claude Code / OpenCode / Codex / Droid / pi.
+# Sourced from ~/.zshrc (after ~/.config/zsh/*.zsh). Self-contained: owns spawn naming,
+# launching (agents are born as windows of the shared `isengard` session), logging,
+# and the `ais` status picker.
+#
+# Source of truth for "what happened":
+#   1. tmux session persistence (session keeps running on detach)
+#   2. tmux scrollback (history-limit 100000, copy mode via prefix [)
+#   3. Tool-native history (claude --continue/--resume, opencode sessions)
+#   4. tmux pipe-pane byte stream in $AI_LOGS_DIR (forensic only)
+# Logs are raw byte streams piped off the pane; TUI redraws fill them with escape
+# sequences. Read with `less -R`. Log filename == the stamped spawn name + ".log";
+# each agent pane carries its path in the @ai_log pane option.
+#
+# Public surface:
+#   ai-claude / ai-opencode / ai-codex / ai-droid / ai-pi   launchers
+#   ais (ai-status)   interactive table: enter attach · ^d cd · ^k kill · ^l log · ^r refresh
+#   ai-attach / ai-cd / ai-kill [filter]            picker-based helpers
+#   ai-logs / ai-log-latest / ai-log-clean          log helpers
+
+typeset -g AI_SESSIONS_FILE="${(%):-%N}"
+typeset -g AI_SESSIONS_DIR="${AI_SESSIONS_DIR:-$HOME/ai-sessions}"
+typeset -g AI_LOGS_DIR="$AI_SESSIONS_DIR/logs"
+[[ -d "$AI_LOGS_DIR" ]] || mkdir -p "$AI_LOGS_DIR"
+
+# ---- tmux seam ----
+
+# Every tmux call in the launcher routes through here. AIL_SOCKET (optional)
+# targets `tmux -L $AIL_SOCKET` — the test-isolation seam shared with ail
+# (ai-run-smoke uses it); unset = default server. (${=...} forces word-
+# splitting: zsh does not split unquoted expansions, and "-L airunsmoke"
+# must be two argv words.)
+_ai_tmux() { command tmux ${=AIL_SOCKET:+-L $AIL_SOCKET} "$@" }
+
+# ---- naming ----
+
+# _ai_repo_branch — print "repo branch" (branch may be empty), lowercased and
+# sanitized to [a-z0-9_-]. Shared extraction for the two names below.
+_ai_repo_branch() {
+  local root repo branch
+  root=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [[ -n "$root" ]]; then
+    repo="${root:t}"
+    branch=$(git -C "$root" branch --show-current 2>/dev/null)
+  else
+    repo="${PWD:t}"
+    branch=""
+  fi
+  repo="${repo:l}"; repo="${repo//[^a-z0-9_-]/-}"
+  branch="${branch:l}"; branch="${branch//[^a-z0-9_-]/-}"
+  print -r -- "$repo" "$branch"
+}
+
+# <prefix>-<repo>[-<branch>]-<MMDD>-<HHMMSS>-<PID>-<RANDOM>
+# The 4 trailing dash-segments are the stamp; everything before is the "base".
+# Survives only as the log filename (and _ai_run's transient window name).
+_ai_session_name() {
+  # $2 (optional): caller-supplied entropy. $RANDOM evaluated here runs in a
+  # command-substitution subshell, which never advances the parent's RNG —
+  # every call from one shell would yield the SAME number, so same-second
+  # spawns would share a log file. Callers pass $RANDOM from their own context.
+  local prefix="$1" repo branch base
+  read -r repo branch <<< "$(_ai_repo_branch)"
+  base="${prefix}-${repo}"
+  [[ -n "$branch" ]] && base="${base}-${branch}"
+  printf '%s-%s-%s-%s\n' "$base" "$(date +%m%d-%H%M%S)" "$$" "${2:-$RANDOM}"
+}
+
+# <prefix>:<repo>[/<branch>] — the display identity inside isengard: pane
+# title + window name. Duplicates are allowed (two cc agents on one
+# repo/branch); tab index and pane position disambiguate.
+_ai_short_name() {
+  local prefix="$1" repo branch short
+  read -r repo branch <<< "$(_ai_repo_branch)"
+  short="${prefix}:${repo}"
+  [[ -n "$branch" ]] && short="${short}/${branch}"
+  print -r -- "$short"
+}
+
+# ---- launcher ----
+
+# Run an agent as a new window (one pane) of the shared `isengard` session,
+# with pipe-pane byte-stream logging. Args: prefix agent-cmd agent-args...
+# Outside tmux: spawn + attach. Inside tmux: spawn + switch-client (still logged).
+_ai_run() {
+  local prefix="$1"; shift
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "ai-sessions: tmux unavailable; running without logging" >&2
+    command "$@"
+    return $?
+  fi
+  # Non-interactive (piped/redirected): run direct, no tmux, no logging.
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    command "$@"
+    return $?
+  fi
+
+  mkdir -p "$AI_LOGS_DIR" 2>/dev/null
+
+  local stamped short logfile
+  stamped=$(_ai_session_name "$prefix" $RANDOM)
+  short=$(_ai_short_name "$prefix")
+  logfile="$AI_LOGS_DIR/${stamped}.log"
+
+  # Shell-quote the agent argv into a single string for tmux, which feeds
+  # the command to /bin/sh -c. Without this, args with spaces/quotes corrupt.
+  local cmd_quoted="" arg
+  for arg in "$@"; do
+    cmd_quoted+="${(q)arg} "
+  done
+
+  # Spawn + tag + wire logging in a single server round-trip, so pipe-pane
+  # catches the agent's output from the first byte (a second client call would
+  # race the agent's first writes). The window is born under the unique
+  # stamped name purely as a target handle for the chain — short names can
+  # collide — and is renamed to $short at the end. allow-rename off +
+  # automatic-rename off pin the tab name: agent TUIs must not clobber it
+  # (global config has allow-rename on). allow-set-title off pins the pane
+  # title the same way — the title is the identity ail renders on deck borders
+  # and copies into mode-1 tab names, and agent TUIs emit OSC 0/2 constantly.
+  local target="=isengard:=${stamped}" pane
+  local -a tag
+  tag=(
+    \; set-option -p -t "$target" @ai_agent "$prefix"
+    \; set-option -p -t "$target" @ai_log "$logfile"
+    \; pipe-pane -o -t "$target" "cat >> ${(q)logfile}"
+    \; select-pane -t "$target" -T "$short"
+    \; set-option -p -t "$target" allow-set-title off
+    \; set-option -w -t "$target" allow-rename off
+    \; set-option -w -t "$target" automatic-rename off
+    \; rename-window -t "$target" "$short"
+  )
+  if _ai_tmux has-session -t "=isengard" 2>/dev/null; then
+    pane=$(_ai_tmux new-window -t "=isengard:" -n "$stamped" -c "$PWD" \
+             -PF '#{pane_id}' "$cmd_quoted" "${tag[@]}") || return $?
+  else
+    pane=$(_ai_tmux new-session -d -s isengard -n "$stamped" -c "$PWD" \
+             -PF '#{pane_id}' "$cmd_quoted" "${tag[@]}") || return $?
+  fi
+
+  echo "ai-sessions: isengard window '$short' ($pane) → ${logfile/#$HOME/~}" >&2
+
+  # Auto-pack: honor the session's declared mode. ail skips already-formed
+  # decks, so this just slots the newborn into the last one; the newborn is
+  # the active pane, so ail's focus-restore lands on it. Layout is cosmetic —
+  # a failed pack must not fail the spawn. Absolute path: same binary the tmux
+  # run-shell binds call. AIL_SOCKET is passed through explicitly: it may be a
+  # non-exported shell var, and ail must hit the same server.
+  # NB: show-options takes a target-PANE — exact-match needs "=isengard:"
+  # (trailing colon); bare "=isengard" fails with "no such session".
+  local mode
+  mode=$(_ai_tmux show-options -v -t "=isengard:" @ai_mode 2>/dev/null)
+  if [[ "$mode" == <-> ]] && (( mode > 1 )); then
+    AIL_SOCKET="$AIL_SOCKET" "$HOME/.local/bin/ail" "$mode" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "$TMUX" ]]; then
+    # switch-client needs a client; a detached spawn (no client attached)
+    # must not hard-fail — the agent is up and logged either way.
+    _ai_tmux switch-client -t "=isengard" 2>/dev/null || true
+  else
+    _ai_tmux attach -t "=isengard"
+  fi
+}
+
+# ---- public launchers ----
+
+ai-claude() {
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "ai-claude: claude binary not found in PATH" >&2; return 127
+  fi
+  _ai_run cc claude --dangerously-skip-permissions "$@"
+}
+
+ai-opencode() {
+  if ! command -v opencode >/dev/null 2>&1; then
+    echo "ai-opencode: opencode binary not found in PATH" >&2
+    echo "  install via: curl -fsSL https://opencode.ai/install | bash" >&2
+    return 127
+  fi
+  _ai_run oc opencode "$@"
+}
+
+ai-codex() {
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "ai-codex: codex binary not found in PATH" >&2; return 127
+  fi
+  _ai_run cx codex --dangerously-bypass-approvals-and-sandbox "$@"
+}
+
+ai-droid() {
+  if ! command -v droid >/dev/null 2>&1; then
+    echo "ai-droid: droid binary not found in PATH" >&2; return 127
+  fi
+  _ai_run dr droid "$@"
+}
+
+ai-pi() {
+  if ! command -v pi >/dev/null 2>&1; then
+    echo "ai-pi: pi binary not found in PATH" >&2; return 127
+  fi
+  _ai_run pi pi "$@"
+}
+
+# ---- pickers ----
+
+# _ai_pick_session [filter] — shared picker for ai-attach/ai-cd/ai-kill.
+# Stdout: chosen session name. Return non-zero on no-match or fzf cancel.
+# Honors $AI_PICK_PROMPT (default "ai-pick> ").
+_ai_pick_session() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "_ai_pick_session: tmux not installed" >&2; return 1
+  fi
+  local filter="$1" sessions
+  case "$filter" in
+    claude|cc)   sessions=$(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^cc-') ;;
+    opencode|oc) sessions=$(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^oc-') ;;
+    codex|cx)    sessions=$(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^cx-') ;;
+    droid|dr)    sessions=$(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^dr-') ;;
+    pi)          sessions=$(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^pi-') ;;
+    "")          sessions=$(tmux ls -F '#{session_name}' 2>/dev/null) ;;
+    *)           sessions=$(tmux ls -F '#{session_name}' 2>/dev/null | grep -F -- "$filter") ;;
+  esac
+  if [[ -z "$sessions" ]]; then
+    echo "_ai_pick_session: no sessions matching '${filter:-*}'" >&2
+    tmux ls 2>/dev/null >&2
+    return 1
+  fi
+  local count target prompt="${AI_PICK_PROMPT:-ai-pick> }"
+  count=$(printf '%s\n' "$sessions" | wc -l | tr -d ' ')
+  if [[ "$count" -eq 1 ]]; then
+    target="$sessions"
+  elif command -v fzf >/dev/null 2>&1; then
+    target=$(printf '%s\n' "$sessions" | fzf --prompt="$prompt" --height=40% --reverse)
+  else
+    echo "_ai_pick_session: multiple sessions, install fzf or pass a more specific filter:" >&2
+    printf '  %s\n' ${(f)sessions} >&2
+    return 1
+  fi
+  [[ -z "$target" ]] && return 1
+  printf '%s\n' "$target"
+}
+
+# _ai_goto_session <name> — attach (or switch-client when inside tmux); chdir after.
+# Captures session_path BEFORE attaching: the session may die on agent exit.
+_ai_goto_session() {
+  # NB: "path" is OFF-LIMITS as a variable name — zsh ties it to PATH; assigning
+  # it clobbers command lookup for the rest of the function.
+  local target="$1" dest
+  # NB: display-message takes a target-PANE: exact-match needs "=name:" (trailing
+  # colon); bare "=name" silently returns empty. attach/switch/kill/has-session
+  # take a target-SESSION and accept bare "=name".
+  dest=$(tmux display-message -p -t "=${target}:" -F '#{session_path}' 2>/dev/null)
+  if [[ -n "$TMUX" ]]; then
+    tmux switch-client -t "=$target"
+    return $?
+  fi
+  tmux attach -t "=$target"
+  if [[ -n "$dest" && -d "$dest" ]]; then
+    cd "$dest"
+  fi
+}
+
+# ai-attach [claude|opencode|codex|droid|<substring>]
+ai-attach() {
+  local target
+  target=$(AI_PICK_PROMPT="ai-attach> " _ai_pick_session "$1") || return $?
+  _ai_goto_session "$target"
+}
+
+# ai-cd [filter] — chdir to the session's path without attaching.
+ai-cd() {
+  local target dest
+  target=$(AI_PICK_PROMPT="ai-cd> " _ai_pick_session "$1") || return $?
+  dest=$(tmux display-message -p -t "=${target}:" -F '#{session_path}' 2>/dev/null)
+  if [[ -n "$dest" && -d "$dest" ]]; then
+    cd "$dest"
+    echo "ai-cd: → $dest" >&2
+  else
+    echo "ai-cd: session path unavailable" >&2
+    return 1
+  fi
+}
+
+# ai-kill [filter] — pick a session and kill it (with confirm).
+ai-kill() {
+  local target reply
+  target=$(AI_PICK_PROMPT="ai-kill> " _ai_pick_session "$1") || return $?
+  read -q "reply?ai-kill: kill session $target? [y/N] " || { echo; return 0 }
+  echo
+  tmux kill-session -t "=$target" && echo "ai-kill: killed $target" >&2
+}
+
+# ---- logs ----
+
+# ai-logs [N] — list N most-recent logs (default 20)
+ai-logs() {
+  local n="${1:-20}"
+  if [[ ! -d "$AI_LOGS_DIR" ]] || [[ -z "$(ls -A "$AI_LOGS_DIR" 2>/dev/null)" ]]; then
+    echo "ai-logs: no logs in $AI_LOGS_DIR" >&2; return 1
+  fi
+  ls -lhtT "$AI_LOGS_DIR" 2>/dev/null | head -n $((n + 1))
+}
+
+# ai-log-latest [N] — open the N-th most-recent log in less (1 = newest)
+ai-log-latest() {
+  setopt local_options null_glob
+  local n="${1:-1}" target
+  local logs=("$AI_LOGS_DIR"/*.log(.om))
+  if (( ${#logs} == 0 )); then
+    echo "ai-log-latest: no logs in $AI_LOGS_DIR" >&2; return 1
+  fi
+  target="${logs[$n]}"
+  if [[ -z "$target" ]]; then
+    echo "ai-log-latest: no log at position $n (have ${#logs})" >&2; return 1
+  fi
+  echo "→ $target" >&2
+  less -R "$target"
+}
+
+# ai-log-clean [DAYS] — remove logs older than DAYS (default 30)
+ai-log-clean() {
+  local days="${1:-30}"
+  if [[ ! -d "$AI_LOGS_DIR" ]]; then
+    echo "ai-log-clean: $AI_LOGS_DIR missing" >&2; return 1
+  fi
+  find "$AI_LOGS_DIR" -type f -name '*.log' -mtime "+${days}" -print -delete
+}
+
+# ---- formatting helpers ----
+
+# Humanize a duration in seconds to compact form: Ns / Nm / NhMm / Nd.
+_ai_humantime() {
+  local s="$1"
+  if (( s < 60 )); then
+    printf '%ds' "$s"
+  elif (( s < 3600 )); then
+    printf '%dm' $(( s / 60 ))
+  elif (( s < 86400 )); then
+    printf '%dh%dm' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+  else
+    printf '%dd' $(( s / 86400 ))
+  fi
+}
+
+# Humanize byte size to K/M/G with one decimal.
+_ai_humansize() {
+  local b="$1"
+  if (( b < 1024 )); then
+    printf '%dB' "$b"
+  elif (( b < 1048576 )); then
+    awk -v b="$b" 'BEGIN { printf "%.1fK", b/1024 }'
+  elif (( b < 1073741824 )); then
+    awk -v b="$b" 'BEGIN { printf "%.1fM", b/1048576 }'
+  else
+    awk -v b="$b" 'BEGIN { printf "%.1fG", b/1073741824 }'
+  fi
+}
+
+# _ai_pad <width> <text> — truncate with ellipsis (keeping a 2-space gap) and pad.
+# Manual padding: printf %-*s pads by bytes, which breaks on multibyte "…".
+_ai_pad() {
+  local w="$1" s="$2"
+  if (( ${#s} > w - 2 )); then
+    s="${s[1,w-3]}…"
+  fi
+  printf '%s%*s' "$s" $(( w - ${#s} )) ''
+}
+
+# _ai_status_widths — compute "repo_w branch_w" from the available terminal width.
+# Inside fzf reloads, FZF_COLUMNS is exported; interactively, zsh sets COLUMNS.
+_ai_status_widths() {
+  local cols
+  cols="${FZF_COLUMNS:-${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}}"
+  (( cols < 80 )) && cols=80
+  # fixed: agent 10 + age 7 + write 8 + size 7 + st 1 + fzf chrome (gutter/border/scrollbar) ~8
+  local flex=$(( cols - 41 ))
+  local repo_w=$(( flex * 55 / 100 ))
+  local branch_w=$(( flex - repo_w ))
+  (( repo_w < 24 ))   && repo_w=24
+  (( branch_w < 16 )) && branch_w=16
+  # Cap so the numeric columns hug the content on very wide terminals.
+  (( repo_w > 40 ))   && repo_w=40
+  (( branch_w > 32 )) && branch_w=32
+  printf '%d %d\n' "$repo_w" "$branch_w"
+}
+
+_ai_agent_label() {
+  case "$1" in
+    cc) print -rn -- "claude" ;;
+    oc) print -rn -- "opencode" ;;
+    cx) print -rn -- "codex" ;;
+    dr) print -rn -- "droid" ;;
+    pi) print -rn -- "pi" ;;
+    *)  print -rn -- "$1" ;;
+  esac
+}
+
+_ai_agent_color() {
+  case "$1" in
+    cc) print -rn -- $'\033[38;2;255;184;108m' ;;  # dracula orange
+    oc) print -rn -- $'\033[38;2;80;250;123m'  ;;  # dracula green
+    cx) print -rn -- $'\033[38;2;139;233;253m' ;;  # dracula cyan
+    dr) print -rn -- $'\033[38;2;255;121;198m' ;;  # dracula pink
+    pi) print -rn -- $'\033[38;2;241;250;140m' ;;  # dracula yellow
+    *)  print -rn -- $'\033[0m' ;;
+  esac
+}
+
+# ---- status table ----
+
+# _ai_status_rows [plain] [all] — emit TAB-delimited rows, one per session:
+#   field 1: session_name (hidden, used for actions)
+#   field 2: logfile path or "-" (hidden, used for ^l)
+#   field 3: formatted display row (ANSI-colored unless "plain")
+# Scope: agent sessions only by default; "all" adds plain tmux sessions, where
+# the REPO column shows the session NAME, BRANCH shows the repo dir, WRITE shows
+# last activity and SIZE the window count.
+# Sorted: most recent first (log mtime / session activity), then created desc.
+# Return 1 if tmux missing, 2 if no matching sessions.
+_ai_status_rows() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    return 1
+  fi
+  setopt local_options null_glob
+  local color_on=1 scope_all=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      plain) color_on=0 ;;
+      all)   scope_all=1 ;;
+    esac
+  done
+
+  local raw
+  raw=$(tmux list-sessions -F '#{session_name}|#{session_created}|#{session_path}|#{session_attached}|#{session_activity}|#{session_windows}' 2>/dev/null)
+  [[ -z "$raw" ]] && return 2
+
+  local c_reset=$'\033[0m'
+  local c_dim=$'\033[38;2;98;114;164m'    # dracula comment
+  local c_green=$'\033[38;2;80;250;123m'
+
+  local repo_w branch_w
+  read -r repo_w branch_w <<< "$(_ai_status_widths)"
+
+  local now; now=$(date +%s)
+  local -a rows
+  local line name created spath attached activity windows prefix base repo branch root
+  local logfile logmtime logsize age_h write_h size_h att_h sort_key is_agent
+  local label color formatted repo_p branch_p where
+  local best best_diff cand cand_mtime diff
+  local -a candidates
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    name="${line%%|*}"; line="${line#*|}"
+    created="${line%%|*}"; line="${line#*|}"
+    spath="${line%%|*}"; line="${line#*|}"
+    attached="${line%%|*}"; line="${line#*|}"
+    activity="${line%%|*}"; line="${line#*|}"
+    windows="$line"
+
+    if [[ "$name" =~ '^(cc|oc|cx|dr|pi)-' ]]; then
+      is_agent=1
+      prefix="${name%%-*}"
+    else
+      (( scope_all )) || continue
+      is_agent=0
+      prefix=""
+    fi
+
+    if [[ -d "$spath" ]]; then
+      root=$(git -C "$spath" rev-parse --show-toplevel 2>/dev/null)
+      if [[ -n "$root" ]]; then
+        repo="${root:t}"
+        branch=$(git -C "$spath" branch --show-current 2>/dev/null)
+        [[ -z "$branch" ]] && branch="?"
+      else
+        repo="${spath:t}"; branch="-"
+      fi
+    else
+      repo="?"; branch="?"
+    fi
+
+    # Log lookup: exact 1:1 (new scheme), else legacy closest-mtime heuristic.
+    logfile=""; logmtime=0; logsize=0
+    if (( ! is_agent )); then
+      : # plain tmux session: no log
+    elif [[ -f "$AI_LOGS_DIR/${name}.log" ]]; then
+      logfile="$AI_LOGS_DIR/${name}.log"
+      logmtime=$(stat -f %m "$logfile" 2>/dev/null || echo 0)
+      logsize=$(stat -f %z "$logfile" 2>/dev/null || echo 0)
+    else
+      # Strip trailing MMDD-HHMMSS-PID-RAND to get <prefix>-<repo>[-<branch>].
+      base="${name%-*-*-*-*}"
+      candidates=("$AI_LOGS_DIR"/${base}-*.log)
+      if (( ${#candidates} > 0 )); then
+        best=""; best_diff=""
+        for cand in "${candidates[@]}"; do
+          cand_mtime=$(stat -f %m "$cand" 2>/dev/null) || continue
+          diff=$(( cand_mtime - created ))
+          (( diff < 0 )) && diff=$(( -diff ))
+          if [[ -z "$best" ]] || (( diff < best_diff )) || { (( diff == best_diff )) && (( cand_mtime > logmtime )); }; then
+            best="$cand"; best_diff="$diff"; logmtime="$cand_mtime"
+          fi
+        done
+        if [[ -n "$best" ]]; then
+          logfile="$best"
+          logsize=$(stat -f %z "$logfile" 2>/dev/null || echo 0)
+        fi
+      fi
+    fi
+
+    age_h=$(_ai_humantime $(( now - created )))
+    if [[ -n "$logfile" ]]; then
+      write_h=$(_ai_humantime $(( now - logmtime )))
+      size_h=$(_ai_humansize "$logsize")
+      sort_key="$logmtime"
+    elif (( ! is_agent )); then
+      # Plain session: WRITE = last activity, SIZE = window count.
+      write_h=$(_ai_humantime $(( now - activity )))
+      size_h="${windows}w"
+      sort_key="$activity"
+    else
+      write_h="-"
+      size_h="-"
+      sort_key="$activity"
+    fi
+
+    if (( is_agent )); then
+      label=$(_ai_agent_label "$prefix")
+      repo_p=$(_ai_pad "$repo_w" "$repo")
+      branch_p=$(_ai_pad "$branch_w" "$branch")
+    else
+      # Plain session: NAME is the identity → REPO column; repo[@branch] → BRANCH column.
+      label="tmux"
+      where="$repo"
+      [[ "$branch" != "-" && "$branch" != "?" ]] && where="${repo}@${branch}"
+      repo_p=$(_ai_pad "$repo_w" "$name")
+      branch_p=$(_ai_pad "$branch_w" "$where")
+    fi
+
+    if (( color_on )); then
+      if (( is_agent )); then
+        color=$(_ai_agent_color "$prefix")
+      else
+        color=$'\033[38;2;189;147;249m'   # dracula purple
+      fi
+      if (( attached >= 1 )); then att_h="${c_green}●${c_reset}"; else att_h="${c_dim}○${c_reset}"; fi
+      formatted="${color}${(r:10:)label}${c_reset}${repo_p}${c_dim}${branch_p}${c_reset}${(r:7:)age_h}${(r:8:)write_h}${(r:7:)size_h}${att_h}"
+    else
+      if (( attached >= 1 )); then att_h="*"; else att_h=""; fi
+      formatted="${(r:10:)label}${repo_p}${branch_p}${(r:7:)age_h}${(r:8:)write_h}${(r:7:)size_h}${att_h}"
+    fi
+
+    rows+=("${sort_key}|${created}|${name}|${logfile:--}|${formatted}")
+  done <<< "$raw"
+
+  (( ${#rows} == 0 )) && return 2
+
+  local -a sorted
+  sorted=("${(@f)$(printf '%s\n' "${rows[@]}" | sort -t'|' -k1,1nr -k2,2nr)}")
+
+  local row n lf fmt
+  for row in "${sorted[@]}"; do
+    [[ -z "$row" ]] && continue
+    row="${row#*|}"; row="${row#*|}"      # drop sort_key, created
+    n="${row%%|*}";  row="${row#*|}"
+    lf="${row%%|*}"
+    fmt="${row#*|}"
+    printf '%s\t%s\t%s\n' "$n" "$lf" "$fmt"
+  done
+}
+
+# ai-status [--all|-a] — table of running agent tmux sessions with repo, branch,
+# age, log activity. With --all, plain tmux sessions are included too (session
+# name in the REPO column) — used by the tmux M-s popup for session hopping.
+# Non-TTY or no fzf: plain table. TTY+fzf: interactive picker with live pane preview:
+#   Enter   → attach (switch-client when inside tmux), chdir after detach
+#   Ctrl-D  → chdir-only to session's path
+#   Ctrl-K  → kill the highlighted session (confirm + instant refresh)
+#   Ctrl-L  → open the session's log in less
+#   Ctrl-R  → refresh the table
+ai-status() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "ai-status: tmux not installed" >&2; return 1
+  fi
+
+  local scope="" prompt="ais ❯ "
+  case "$1" in
+    --all|-a|all) scope="all"; prompt="tmux ❯ " ;;
+  esac
+
+  local -a data_rows
+  data_rows=("${(@f)$(_ai_status_rows $scope)}")
+  if (( ${#data_rows} == 0 )) || [[ -z "${data_rows[1]}" ]]; then
+    echo "ai-status: no ${scope:-agent} sessions running" >&2; return 0
+  fi
+
+  local header repo_w branch_w
+  read -r repo_w branch_w <<< "$(_ai_status_widths)"
+  header=$(printf '%-10s%-*s%-*s%-7s%-8s%-7s%s' AGENT "$repo_w" REPO "$branch_w" BRANCH AGE WRITE SIZE ST)
+
+  # Non-TTY or no fzf → plain table.
+  if [[ ! -t 1 ]] || ! command -v fzf >/dev/null 2>&1; then
+    local -a plain_rows
+    plain_rows=("${(@f)$(_ai_status_rows plain $scope)}")
+    printf '%s\n' "$header"
+    local r
+    for r in "${plain_rows[@]}"; do
+      [[ -z "$r" ]] && continue
+      printf '%s\n' "${r##*$'\t'}"
+    done
+    return 0
+  fi
+
+  # TTY + fzf → interactive picker.
+  local src reload_cmd kill_cmd
+  src="source ${(q)AI_SESSIONS_FILE} && _ai_status_rows $scope"
+  reload_cmd="command zsh -fc ${(q)src}"
+  kill_cmd='printf "\n  kill %s? [y/N] " {1}; read -r r </dev/tty; case "$r" in [yY]*) tmux kill-session -t ={1};; esac'
+
+  local result key selected target
+  # --with-shell: zsh would apply equals-expansion to the `-t =name` exact-match
+  # targets inside preview/execute commands; POSIX sh has no such expansion.
+  # --height/--no-multi override the global FZF_DEFAULT_OPTS (40%, --multi).
+  result=$(printf '%s\n' "${data_rows[@]}" | fzf \
+    --with-shell='/bin/sh -c' \
+    --height=100% \
+    --no-multi \
+    --ansi \
+    --delimiter=$'\t' \
+    --with-nth=3 \
+    --expect=ctrl-d \
+    --prompt="$prompt" \
+    --header=$'enter attach · ^d cd · ^k kill · ^l log · ^r refresh\n'"$header" \
+    --reverse \
+    --preview='tmux capture-pane -ep -t ={1}: 2>/dev/null || echo "(session ended — ^r to refresh)"' \
+    --preview-window='down,60%,border-top' \
+    --preview-label=' live pane ' \
+    --bind="ctrl-r:reload($reload_cmd)" \
+    --bind='ctrl-l:execute(test -f {2} && less -R {2})' \
+    --bind="ctrl-k:execute($kill_cmd)+reload($reload_cmd)" \
+    --color='bg+:#44475a,fg+:#f8f8f2,hl:#bd93f9,hl+:#ff79c6,info:#6272a4,prompt:#50fa7b,pointer:#ff79c6,header:#6272a4,border:#6272a4,preview-border:#bd93f9,label:#bd93f9') || return 0
+  [[ -z "$result" ]] && return 0
+
+  # --expect output: line 1 is the key ("" on enter), line 2 the selection.
+  key="${result%%$'\n'*}"
+  selected="${result#*$'\n'}"
+  target="${selected%%$'\t'*}"
+  [[ -z "$target" ]] && return 0
+
+  if ! tmux has-session -t "=$target" 2>/dev/null; then
+    echo "ais: session '$target' no longer exists" >&2
+    return 1
+  fi
+
+  case "$key" in
+    ctrl-d)
+      local p
+      p=$(tmux display-message -p -t "=${target}:" -F '#{session_path}' 2>/dev/null)
+      if [[ -n "$p" && -d "$p" ]]; then
+        cd "$p"
+        echo "ais: → $p" >&2
+      else
+        echo "ais: session path unavailable" >&2
+        return 1
+      fi
+      ;;
+    *)
+      _ai_goto_session "$target"
+      ;;
+  esac
+}
+alias ais=ai-status

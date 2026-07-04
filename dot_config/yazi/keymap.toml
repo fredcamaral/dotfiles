@@ -1,15 +1,24 @@
-# Yazi keymap configuration - compatible with v0.4+
-# Schema: https://yazi-rs.github.io/schemas/keymap.json
-"$schema" = "https://yazi-rs.github.io/schemas/keymap.json"
-
 [mgr]
 prepend_keymap = [
-  # Git integration
-  { on = ["g", "s"], run = "shell 'git status' --block", desc = "Git status" },
-  { on = ["g", "a"], run = "shell 'git add -- \"$@\"' --block", desc = "Git add selected" },
-  { on = ["g", "A"], run = "shell 'git add .' --block", desc = "Git add all" },
-  { on = ["g", "c"], run = "shell 'git commit' --block", desc = "Git commit" },
-  { on = ["g", "p"], run = "shell 'git push' --block", desc = "Git push" },
-  { on = ["g", "d"], run = "shell 'git diff -- \"$@\"' --block", desc = "Git diff selected" },
-  { on = ["g", "l"], run = "shell 'git log --oneline -20' --block", desc = "Git log" },
+	{ on = "<Esc>", run = "plugin escape-or-quit", desc = "Escape, or quit when nothing to cancel" },
+	{ on = "e", run = "shell --block micro %h", desc = "Open hovered file in micro" },
+	{ on = "l", run = "plugin smart-enter", desc = "Enter directory or open file" },
+	{ on = "p", run = "plugin smart-paste", desc = "Paste into hovered directory or CWD" },
+	{ on = "F", run = "plugin smart-filter", desc = "Smart filter" },
+	{ on = "f", run = "plugin jump-to-char", desc = "Jump to char" },
+	{ on = "T", run = "plugin toggle-pane min-preview", desc = "Show or hide preview pane" },
+	{ on = "M", run = "plugin mount", desc = "Mount manager" },
+	{ on = "+", run = "plugin zoom 1", desc = "Zoom in hovered image" },
+	{ on = "-", run = "plugin zoom -1", desc = "Zoom out hovered image" },
+	{ on = [ "g", "v" ], run = "plugin vcs-files", desc = "Show Git-changed files" },
+	{ on = [ "b", "a" ], run = "plugin mactag add", desc = "Add macOS tag" },
+	{ on = [ "b", "r" ], run = "plugin mactag remove", desc = "Remove macOS tag" },
+	{ on = [ ",", "d" ], run = "plugin diff", desc = "Diff selected file with hovered file" },
+	{ on = [ "c", "m" ], run = "plugin chmod", desc = "Chmod selected files" },
+
+	# --- Kept from your previous keymap (no conflict with the spec) ---
+	{ on = "E", run = "shell --block nvim %h", desc = "Edit hovered file in nvim" },
+	{ on = "x", run = "shell --block ouch decompress %s", desc = "Extract selected archive(s)" },
+	{ on = [ "g", "p" ], run = "plugin toggle-pane max-preview", desc = "Maximize or restore preview pane" },
+	{ on = [ "g", "l" ], run = "shell --block lazygit", desc = "Open lazygit" },
 ]
