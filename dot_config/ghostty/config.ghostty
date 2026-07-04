@@ -1,0 +1,146 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# GHOSTTY CONFIG — Dev-centered setup (tmux as multiplexer)
+# Source of truth: ~/.config/ghostty/config.ghostty
+# Validate after edits: ghostty +show-config
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# FONT — Berkeley Mono
+# ─────────────────────────────────────────────────────────────────────────────────
+font-family = Berkeley Mono
+font-size = 14
+font-style = Regular
+font-style-bold = Bold
+font-style-italic = Regular Italic
+font-style-bold-italic = Bold Italic
+
+adjust-cell-width = 0
+adjust-cell-height = 8%
+adjust-cursor-height = 0
+
+# macOS font rendering
+font-thicken = false
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# CURSOR — block, no blink
+# ─────────────────────────────────────────────────────────────────────────────────
+cursor-style = block
+cursor-style-blink = false
+cursor-opacity = 1
+cursor-click-to-move = true
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# THEME — Catppuccin Mocha
+# ─────────────────────────────────────────────────────────────────────────────────
+theme = Catppuccin Frappe
+bold-is-bright = false
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# WINDOW & APPEARANCE
+# ─────────────────────────────────────────────────────────────────────────────────
+background-opacity = 1
+background-blur = false
+window-padding-x = 12
+window-padding-y = 10
+window-padding-balance = true
+window-decoration = auto
+window-theme = auto
+window-save-state = always
+window-colorspace = srgb
+unfocused-split-opacity = 0.75
+
+# Quick terminal
+quick-terminal-position = top
+quick-terminal-size = 40%
+quick-terminal-animation-duration = 0.15
+quick-terminal-autohide = true
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# TERMINAL BEHAVIOR
+# ─────────────────────────────────────────────────────────────────────────────────
+scrollback-limit = 100000000
+clipboard-read = ask
+clipboard-write = allow
+copy-on-select = clipboard
+clipboard-trim-trailing-spaces = true
+clipboard-paste-protection = true
+selection-clear-on-typing = true
+
+# Mouse
+mouse-hide-while-typing = true
+focus-follows-mouse = true
+mouse-scroll-multiplier = 3
+
+# Links
+link-url = true
+link-previews = true
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# SHELL INTEGRATION
+# ssh-env + no-ssh-terminfo: skip remote terminfo install, fall back to
+# xterm-256color over ssh instead of xterm-ghostty.
+# ─────────────────────────────────────────────────────────────────────────────────
+shell-integration = zsh
+shell-integration-features = sudo, title, ssh-env, no-ssh-terminfo, cursor, path
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# PERFORMANCE
+# ─────────────────────────────────────────────────────────────────────────────────
+window-vsync = true
+grapheme-width-method = unicode
+image-storage-limit = 320000000
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# KEYBINDINGS
+# ─────────────────────────────────────────────────────────────────────────────────
+
+# Let tmux own Alt/Shift arrow navigation.
+keybind = alt+arrow_left=unbind
+keybind = alt+arrow_right=unbind
+keybind = shift+arrow_left=unbind
+keybind = shift+arrow_right=unbind
+
+# Modified Enter — kitty keyboard protocol (CSI u) so tmux passes them through
+# to apps (Claude Code, etc.) instead of decoding ESC-prefixed bytes as M-Enter.
+keybind = shift+enter=text:\x1b[13;2u
+keybind = ctrl+enter=text:\x1b[13;5u
+keybind = ctrl+shift+enter=text:\x1b[13;6u
+
+# Ctrl+Backspace → delete word backward (^W)
+keybind = ctrl+backspace=text:\x17
+
+# Copy/paste
+keybind = ctrl+shift+c=copy_to_clipboard
+keybind = ctrl+shift+v=paste_from_clipboard
+keybind = shift+insert=paste_from_clipboard
+
+# Scroll to buffer edges
+keybind = ctrl+home=scroll_to_top
+keybind = ctrl+end=scroll_to_bottom
+
+# Shift+Tab → back-tab (fzf, completion menus)
+keybind = shift+tab=text:\x1b[Z
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# macOS SPECIFIC
+# ─────────────────────────────────────────────────────────────────────────────────
+macos-option-as-alt = true
+macos-titlebar-style = tabs
+macos-titlebar-proxy-icon = visible
+macos-non-native-fullscreen = visible-menu
+macos-secure-input-indication = true
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# MISC
+# ─────────────────────────────────────────────────────────────────────────────────
+confirm-close-surface = true
+quit-after-last-window-closed = false
+auto-update = download
+auto-update-channel = tip
+
+# Resize overlay
+resize-overlay = after-first
+resize-overlay-position = bottom-right
+resize-overlay-duration = 500ms
+
+# vim: ft=config
