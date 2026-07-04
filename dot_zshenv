@@ -1,0 +1,14 @@
+# Keep Homebrew binaries visible to non-interactive SSH commands.
+# Mosh starts mosh-server through SSH, which does not read .zprofile.
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+
+# Keep remote shells usable from Termius/Mosh: UTF-8 text and ANSI colors.
+export LANG="${LANG:-en_US.UTF-8}"
+export LC_CTYPE="${LC_CTYPE:-en_US.UTF-8}"
+export CLICOLOR=1
+
+case "${TERM:-}" in
+  ""|dumb|vt100|xterm)
+    export TERM=xterm-256color
+    ;;
+esac

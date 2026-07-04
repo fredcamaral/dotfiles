@@ -1,8 +1,16 @@
 # chezmoi configuration
 # Secrets are fetched directly from 1Password "Dotfiles" vault
 
+# The "Dotfiles" vault lives in the personal account. A second logged-in
+# account (lerianstudio/work) makes `op` ask which one to use. chezmoi's
+# [onepassword] has no `account` field, so we pin it via OP_ACCOUNT in [env] —
+# `op` honors that env var for both `signin` and `read`.
 [onepassword]
+    mode = "account"
     prompt = true
+
+[env]
+    OP_ACCOUNT = "my.1password.com"
 
 [data]
     email = "fred@fredamaral.com.br"
