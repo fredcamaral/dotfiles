@@ -1,0 +1,47 @@
+{{/* chezmoi:modify-template */}}
+{{- /* Manage ONLY mcpServers inside ~/.claude.json — everything else in the
+       file is Claude Code runtime state (projects, caches, oauth, machine id)
+       and must never be clobbered by an apply. Secrets never live in this
+       repo (it is public): the two machine-local tokens are carried over
+       from the live file; on a fresh machine they materialize as REPLACE_ME
+       to fill in once. When the live mcpServers already match the desired
+       set, the file is echoed byte-for-byte so `chezmoi status` stays
+       quiet. */ -}}
+{{- $current := fromJson .chezmoi.stdin -}}
+{{- $cur := get $current "mcpServers" | default (dict) -}}
+{{- $argocdToken := dig "argocd-benedita" "env" "ARGOCD_API_TOKEN" "REPLACE_ME" $cur -}}
+{{- $matcherAuth := dig "matcher-sandbox" "headers" "Authorization" "Bearer REPLACE_ME" $cur -}}
+{{- $want := dict
+      "BR Bank Transfer JD" (dict
+        "command" "npx"
+        "args" (list "-y" "apidog-mcp-server@latest" "--project-id=1213896")
+        "env" (dict "APIDOG_ACCESS_TOKEN" "${APIDOG_ACCESS_TOKEN}"))
+      "argocd-benedita" (dict
+        "type" "stdio"
+        "command" "npx"
+        "args" (list "-y" "argocd-mcp@0.8.0" "stdio")
+        "env" (dict
+          "ARGOCD_BASE_URL" "https://argocd.eveo.lerian.net"
+          "ARGOCD_API_TOKEN" $argocdToken
+          "NODE_TLS_REJECT_UNAUTHORIZED" "0"))
+      "firecrawl" (dict
+        "command" "npx"
+        "args" (list "-y" "firecrawl-mcp")
+        "env" (dict "FIRECRAWL_API_KEY" "${FIRECRAWL_API_KEY}"))
+      "grafana-lerian" (dict
+        "command" "uvx"
+        "args" (list "mcp-grafana")
+        "env" (dict
+          "GRAFANA_URL" "https://grafana.private.midaz.io"
+          "GRAFANA_SERVICE_ACCOUNT_TOKEN" "${GRAFANA_SERVICE_ACCOUNT_TOKEN}"))
+      "matcher-sandbox" (dict
+        "type" "http"
+        "url" "https://matcher-mcp.sandbox.lerian.net/mcp"
+        "headers" (dict "Authorization" $matcherAuth))
+-}}
+{{- if eq (toJson $cur) (toJson $want) -}}
+{{- .chezmoi.stdin -}}
+{{- else -}}
+{{- $_ := set $current "mcpServers" $want -}}
+{{- toPrettyJson $current -}}
+{{- end -}}
