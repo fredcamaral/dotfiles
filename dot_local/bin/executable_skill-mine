@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""skill-mine — extract a day's Claude Code activity as raw material for skill mining.
+
+Given a date (YYYY-MM-DD, local time), scans ~/.claude/projects/**/*.jsonl and
+emits, grouped by repo:
+  - Fred's real prompts that day (noise filtered)
+  - a tool-usage histogram (which tools, how many times) — signals repetitive
+    mechanical work that a skill could encode
+  - notable bash command *patterns* (git/gh/make/docker/kubectl/helm/pnpm/etc.)
+
+The point is to give a subagent clean, comparable fuel to spot RECURRING
+procedures across days — not to summarize prose.
+
+Usage: skill-mine YYYY-MM-DD
+"""
+import os
+import sys
+import json
+import glob
+import re
+import datetime as dt
+from collections import defaultdict, Counter
+
+HOME = os.path.expanduser("~")
+ROOT = os.path.join(HOME, ".claude/projects")
+
+if len(sys.argv) < 2:
+    print("usage: skill-mine YYYY-MM-DD", file=sys.stderr)
+    sys.exit(2)
+try:
+    DAY = dt.datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
+except ValueError:
+    print(f"bad date: {sys.argv[1]} (want YYYY-MM-DD)", file=sys.stderr)
+    sys.exit(2)
+
+# mtime prefilter window: files touched anywhere near the target day
+_win_lo = dt.datetime.combine(DAY - dt.timedelta(days=1), dt.time()).timestamp()
+_win_hi = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time()).timestamp()
+
+MAX_PROMPT_CHARS = 220
+NOISE_PREFIXES = (
+    "<local-command", "caveat:", "<command-name>", "<command-message>",
+    "<task-notification>", "<bash-input>", "<bash-stdout>", "<bash-stderr>",
+    "another claude session sent a message", "<teammate-message",
+    "this session is being continued", "stop hook feedback:",
+    "base directory for this skill", "[request interrupted",
+    "<system-reminder>", "<local-command-stdout>", "<command-args>",
+)
+
+def clean(text, limit):
+    if not isinstance(text, str):
+        return ""
+    text = " ".join(text.split())
+    return (text[:limit].rstrip() + "…") if len(text) > limit else text
+
+def is_noise(text):
+    low = text.lower().lstrip()
+    if any(low.startswith(p) for p in NOISE_PREFIXES):
+        return True
+    if low.startswith("#") and len(text) > 200:
+        return True
+    return False
+
+def repo_from_path(p):
+    if not p:
+        return "(unknown)"
+    p = p.rstrip("/")
+    if p in (HOME, "/home/fredamaral") or p == os.path.dirname(HOME):
+        return "(home)"
+    base = os.path.basename(p)
+    parent = os.path.basename(os.path.dirname(p))
+    if parent and parent not in ("repos", ""):
+        return f"{parent}/{base}"
+    return base or "(unknown)"
+
+def iso_date(s):
+    try:
+        return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone().date()
+    except Exception:
+        return None
+
+def content_to_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text":
+                out.append(b.get("text", ""))
+        return " ".join(out)
+    return ""
+
+# bash command classifier -> coarse pattern label
+BASH_PATTERNS = [
+    (re.compile(r"\bgit\s+(push|pull|fetch|merge|rebase|worktree|branch|checkout|status|commit|log|diff|reset|cherry-pick)"), "git:{1}"),
+    (re.compile(r"\bgh\s+(pr|issue|repo|run|workflow|api|release)"), "gh:{1}"),
+    (re.compile(r"\bmake\s+(ci|test|lint|build|integrated|[a-z-]+)"), "make:{1}"),
+    (re.compile(r"\b(docker|docker-compose)\s+(build|up|down|run|ps|logs|exec|compose)"), "docker:{2}"),
+    (re.compile(r"\b(kubectl|k9s)\b"), "kubectl"),
+    (re.compile(r"\bhelm\s+(install|upgrade|template|lint|dependency)"), "helm:{1}"),
+    (re.compile(r"\b(pnpm|npm|yarn|bun)\s+([a-z:]+)"), "node:{2}"),
+    (re.compile(r"\bgo\s+(test|build|mod|vet|run)"), "go:{1}"),
+    (re.compile(r"\bpython3?\s+-c"), "python:inline"),
+    (re.compile(r"\b(rg|grep|find|ls|cat|head|tail|sed|awk|jq)\b"), "shell:inspect"),
+    (re.compile(r"\bpsql|pg_dump|createdb\b"), "postgres"),
+    (re.compile(r"\bcurl|wget\b"), "http"),
+    (re.compile(r"\bvault\b"), "vault"),
+    (re.compile(r"\bpct|pvesh|qm\b"), "proxmox"),
+]
+
+def classify_bash(cmd):
+    for rx, label in BASH_PATTERNS:
+        m = rx.search(cmd)
+        if m:
+            out = label
+            for i in range(1, (m.lastindex or 0) + 1):
+                out = out.replace("{%d}" % i, (m.group(i) or ""))
+            return out
+    return None
+
+repos = defaultdict(lambda: {
+    "prompts": [], "tools": Counter(), "bash": Counter(), "sessions": set(),
+})
+
+def scan_file(path):
+    repo_hint = None
+    try:
+        with open(path, "r", errors="ignore") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if iso_date(d.get("timestamp", "")) != DAY:
+                    continue
+                cwd = d.get("cwd")
+                if cwd:
+                    repo_hint = repo_from_path(cwd)
+                repo = repo_hint or "(unknown)"
+                sid = d.get("sessionId", "")
+                msg = d.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role")
+                if sid:
+                    repos[repo]["sessions"].add(sid)
+                if role == "user":
+                    txt = clean(content_to_text(msg.get("content")), MAX_PROMPT_CHARS)
+                    if txt and not is_noise(txt):
+                        repos[repo]["prompts"].append(txt)
+                elif role == "assistant":
+                    c = msg.get("content")
+                    if isinstance(c, list):
+                        for b in c:
+                            if isinstance(b, dict) and b.get("type") == "tool_use":
+                                name = b.get("name", "")
+                                repos[repo]["tools"][name] += 1
+                                if name == "Bash":
+                                    cmd = (b.get("input", {}) or {}).get("command", "")
+                                    lbl = classify_bash(cmd)
+                                    if lbl:
+                                        repos[repo]["bash"][lbl] += 1
+    except OSError:
+        return
+
+def main():
+    for slug_dir in os.listdir(ROOT):
+        d = os.path.join(ROOT, slug_dir)
+        if not os.path.isdir(d):
+            continue
+        for f in glob.glob(os.path.join(d, "*.jsonl")):  # skip subagents subdir
+            try:
+                mt = os.path.getmtime(f)
+            except OSError:
+                continue
+            if mt < _win_lo or mt > _win_hi:
+                continue
+            scan_file(f)
+
+    active = {r: v for r, v in repos.items() if v["prompts"] or sum(v["tools"].values())}
+    print(f"# skill-mine | day: {DAY} | {len(active)} repo(s) with activity")
+    if not active:
+        print("NO_ACTIVITY")
+        return
+    # order by total tool volume (busiest first)
+    ordered = sorted(active.items(),
+                     key=lambda kv: sum(kv[1]["tools"].values()), reverse=True)
+    for repo, v in ordered:
+        ntool = sum(v["tools"].values())
+        print(f"\n## {repo}  | {len(v['sessions'])} session(s) | {ntool} tool calls")
+        if v["bash"]:
+            top = ", ".join(f"{k}×{n}" for k, n in v["bash"].most_common(12))
+            print(f"  BASH_PATTERNS: {top}")
+        # non-bash tools (MCP, Read, Edit, Task, etc.)
+        nonbash = [(k, n) for k, n in v["tools"].most_common() if k != "Bash"]
+        if nonbash:
+            top = ", ".join(f"{k}×{n}" for k, n in nonbash[:12])
+            print(f"  TOOLS: {top}")
+        seen = set()
+        for p in v["prompts"]:
+            if p in seen:
+                continue
+            seen.add(p)
+            print(f"  USER: {p}")
+
+if __name__ == "__main__":
+    main()

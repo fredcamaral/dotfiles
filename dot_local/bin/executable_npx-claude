@@ -1,0 +1,6 @@
+#!/bin/bash
+# Wrapper script for npx to work with Claude Desktop
+# This script ensures the correct PATH is available
+
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+exec /opt/homebrew/bin/npx "$@"

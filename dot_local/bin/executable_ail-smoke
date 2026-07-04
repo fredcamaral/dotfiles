@@ -1,0 +1,208 @@
+#!/usr/bin/env zsh
+# ail-smoke: smoke test for ail (~/.local/bin/ail) on an ISOLATED tmux server.
+#
+# SAFETY: the default tmux server carries live agent sessions — every tmux call
+# in this file runs on a private socket (tmux -L ailsmoke) with -f /dev/null
+# (no user config, hermetic server). The EXIT trap kills ONLY that server; no
+# command in this file ever addresses the default server.
+#
+# Fake agents are `sleep 600` panes tagged with the @ai_agent pane option and a
+# `prefix:repo/branch` pane title — exactly the identity contract ail packs on.
+# Cases run in sequence and build on each other's state (mode switches are the
+# thing under test). Prints PASS/FAIL per case; exits 1 if any case failed.
+
+typeset -g SOCK=ailsmoke
+typeset -g AIL="${AIL:-$HOME/.local/bin/ail}"
+export AIL_SOCKET="$SOCK"
+
+# Every tmux call in this file goes through T: private socket, no user config
+# (-f is only read at server start; harmless on later calls).
+T() { command tmux -L "$SOCK" -f /dev/null "$@" }
+
+cleanup() { command tmux -L "$SOCK" kill-server 2>/dev/null; true }
+trap cleanup EXIT
+# INT/TERM: cleanup alone would RESUME the script against a dead server,
+# cascading misleading FAILs — terminate explicitly.
+trap 'cleanup; exit 130' INT TERM
+cleanup   # stale server from a previous run → start fresh
+
+# ---- assertions ----
+
+typeset -gi fails=0
+pass() { print -r -- "PASS: $1" }
+fail() { print -r -- "FAIL: $1"; (( ++fails )) }
+# check <desc> <want> <got>
+check() {
+  if [[ "$3" == "$2" ]]; then pass "$1"; else fail "$1 — want [$2] got [$3]"; fi
+}
+# run_ail <args...> — invoke ail; a non-zero exit is itself a failure.
+run_ail() { "$AIL" "$@" >/dev/null 2>&1 || fail "ail $* exited non-zero" }
+
+# ---- helpers ----
+
+# spawn_agent <prefix> <title> — new window in isengard running a fake agent,
+# tagged @ai_agent + pane title. Prints the new pane id.
+spawn_agent() {
+  local pid
+  pid=$(T new-window -t '=isengard:' -PF '#{pane_id}' 'sleep 600') || return 1
+  T set-option -p -t "$pid" @ai_agent "$1"
+  T select-pane -t "$pid" -T "$2"
+  print -r -- "$pid"
+}
+
+# agent_windows — unique window ids currently holding agent panes.
+agent_windows() {
+  T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_id}' | sort -u
+}
+
+# agent_panes_ordered — agent pane ids in spawn order (numeric pane id).
+agent_panes_ordered() {
+  T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{pane_id}' | sort -t'%' -k2,2n
+}
+
+# panes_of <window-name> — pane count of the window named $1 ("" if absent).
+panes_of() {
+  T list-windows -t '=isengard' -F '#{window_name}:#{window_panes}' \
+    | awk -F: -v n="$1" '$1 == n { print $2; exit }'
+}
+
+# zoomed_count — number of isengard windows currently zoomed.
+zoomed_count() {
+  T list-windows -t '=isengard' -F '#{window_zoomed_flag}' | grep -c '^1$'
+}
+
+count() { wc -l | tr -d ' ' }
+
+# ---- setup: isengard + 9 fake agents ----
+
+T new-session -d -s isengard -x 220 -y 50 'sleep 600' \
+  || { echo "ail-smoke: cannot start test server" >&2; exit 1 }
+
+typeset -a prefixes=(cc oc cx dr pi cc oc cx dr)
+typeset -i i
+for i in {1..9}; do
+  spawn_agent "${prefixes[$i]}" "${prefixes[$i]}:repo$i/branch$i" >/dev/null \
+    || fail "setup: spawn_agent $i"
+done
+check "setup: 9 agent panes tagged" "9" "$(agent_panes_ordered | count)"
+
+# ---- case 1: ail 8 → two decks, 8+1 ----
+
+run_ail 8
+check "case 1: ail 8 → 2 agent windows" "2" "$(agent_windows | count)"
+check "case 1: d1 has 8 panes" "8" "$(panes_of d1)"
+check "case 1: d2 has 1 pane" "1" "$(panes_of d2)"
+
+# ---- case 2: ail 2 → five decks, 4x2 + 1x1 ----
+
+run_ail 2
+check "case 2: ail 2 → 5 agent windows" "5" "$(agent_windows | count)"
+dist=$(agent_windows | while IFS= read -r w; do
+         T display-message -p -t "$w" '#{window_panes}'
+       done | sort -n | paste -sd' ' -)
+check "case 2: deck sizes 1 2 2 2 2" "1 2 2 2 2" "$dist"
+
+# ---- case 3: ail 1 → one tab per agent, tab name = pane title ----
+
+run_ail 1
+check "case 3: ail 1 → 9 agent windows" "9" "$(agent_windows | count)"
+bad=$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' \
+        -F '#{window_name}|#{pane_title}|#{window_panes}' \
+      | awk -F'|' '$1 != $2 || $3 != 1' | count)
+check "case 3: every window solo + named by pane title" "0" "$bad"
+
+# ---- case 4: non-agent immunity ----
+
+shell_wid=$(T new-window -t '=isengard:' -n shell -PF '#{window_id}' 'sleep 600')
+T split-window -t "$shell_wid" 'sleep 600'
+run_ail 8
+got=$(T list-windows -t '=isengard' -F '#{window_id}:#{window_name}:#{window_panes}' \
+      | grep -F "${shell_wid}:")
+check "case 4: plain 'shell' window untouched by ail 8" "${shell_wid}:shell:2" "$got"
+
+# ---- case 5: focus restore across a re-pack ----
+
+target=$(agent_panes_ordered | sed -n 3p)
+T select-window -t "$target"
+T select-pane -t "$target"
+run_ail 2
+# NB: display-message takes a target-PANE — "=isengard:" (trailing colon) is the
+# active pane of the session's current window.
+active=$(T display-message -p -t '=isengard:' '#{pane_id}')
+check "case 5: active pane survives ail 2" "$target" "$active"
+
+# ---- case 6: idempotency — ail 8 twice, identical window map ----
+
+run_ail 8
+snap1=$(T list-windows -t '=isengard' -F '#{window_id}:#{window_panes}')
+run_ail 8
+snap2=$(T list-windows -t '=isengard' -F '#{window_id}:#{window_panes}')
+check "case 6: ail 8 twice → identical snapshot" "$snap1" "$snap2"
+
+# ---- case 7: zoom guard ----
+
+deck_pane=$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{pane_id} #{window_panes}' \
+            | awk '$2 > 1 { print $1; exit }')
+T resize-pane -Z -t "$deck_pane"
+check "case 7: precondition — one window zoomed" "1" "$(zoomed_count)"
+run_ail 8
+check "case 7: no window left zoomed after ail 8" "0" "$(zoomed_count)"
+check "case 7: d1 still 8 panes" "8" "$(panes_of d1)"
+check "case 7: d2 still 1 pane" "1" "$(panes_of d2)"
+
+# ---- case 7b: zoomed NON-agent window keeps its zoom (immunity) ----
+
+T resize-pane -Z -t "$shell_wid"
+check "case 7b: precondition — shell window zoomed" "1" "$(zoomed_count)"
+run_ail 8
+shell_zoom=$(T list-windows -t '=isengard' -F '#{window_id} #{window_zoomed_flag}' \
+             | awk -v w="$shell_wid" '$1 == w { print $2 }')
+check "case 7b: shell window still zoomed after ail 8" "1" "$shell_zoom"
+T resize-pane -Z -t "$shell_wid"   # restore
+
+# ---- case 7c: drained deck window gives back its dN name ----
+
+d1_wid=$(T list-windows -t '=isengard' -F '#{window_id} #{window_name}' \
+         | awk '$2 == "d1" { print $1; exit }')
+stray=$(T split-window -d -t "$d1_wid" -PF '#{pane_id}' 'sleep 600')
+run_ail 8
+check "case 7c: exactly one window named d1 after re-pack" "1" \
+  "$(T list-windows -t '=isengard' -F '#{window_name}' | grep -cx d1)"
+check "case 7c: d1 rebuilt with 8 panes" "8" "$(panes_of d1)"
+T kill-pane -t "$stray" 2>/dev/null   # restore
+
+# ---- case 8: bare ail → status line ----
+
+out=$("$AIL" 2>/dev/null)
+if [[ "$out" == *"mode 8"* && "$out" == *"9 agents"* ]]; then
+  pass "case 8: status line [$out]"
+else
+  fail "case 8: status line — want *mode 8*/*9 agents* got [$out]"
+fi
+
+# ---- case 9: @ai_mode bookkeeping ----
+
+typeset -i m
+for m in 2 1 8; do
+  run_ail $m
+  # NB: show-options takes a target-PANE — "=isengard:" (trailing colon).
+  check "case 9: @ai_mode == $m after ail $m" "$m" \
+    "$(T show-options -v -t '=isengard:' @ai_mode 2>/dev/null)"
+done
+
+# ---- case 10: zero agents still records @ai_mode (spawn-side pre-set flow) ----
+
+agent_panes_ordered | while IFS= read -r p; do T kill-pane -t "$p" 2>/dev/null; done
+check "case 10: all agents gone" "0" "$(agent_panes_ordered | count)"
+run_ail 5
+check "case 10: @ai_mode == 5 with zero agents" "5" \
+  "$(T show-options -v -t '=isengard:' @ai_mode 2>/dev/null)"
+
+# ---- summary ----
+
+print -r -- "----"
+if (( fails > 0 )); then
+  print -r -- "ail-smoke: $fails check(s) FAILED"
+  exit 1
+fi
+print -r -- "ail-smoke: all checks passed"

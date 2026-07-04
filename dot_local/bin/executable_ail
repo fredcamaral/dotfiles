@@ -1,0 +1,220 @@
+#!/usr/bin/env zsh
+# ail: agent layout engine for the isengard tmux session.
+#
+# Agent panes carry the @ai_agent pane option (cc/oc/cx/dr/pi) and a
+# `prefix:repo/branch` pane title. ail re-packs them into "decks" — windows of
+# N side-by-side columns — via break-pane/join-pane, which move LIVE panes
+# without restarting the process underneath. Non-agent panes/windows (plain
+# shells, manual splits) are never touched.
+#
+#   ail        one-line status: "mode 8 · 9 agents · 2 decks"
+#   ail N      re-pack into decks of N (N>=1); N==1 = one named tab per agent
+#
+# Self-contained on purpose: tmux run-shell binds call it by absolute path and
+# the tmux server's inherited PATH may lack ~/.local/bin — no zshrc, no
+# ai-sessions.sh dependency. AIL_SOCKET (optional) routes every tmux call to
+# `tmux -L $AIL_SOCKET` — the test-isolation seam used by ail-smoke; unset =
+# default server.
+
+typeset -g AIL_SESSION="isengard"
+
+# Pane border: title colored per agent prefix (dracula) — cc orange · oc green
+# · cx cyan · dr pink · pi yellow. tmux has no case, only nested #{?} chains.
+typeset -g AIL_BORDER_FMT='#{?#{==:#{@ai_agent},cc},#[fg=#ffb86c],#{?#{==:#{@ai_agent},oc},#[fg=#50fa7b],#{?#{==:#{@ai_agent},cx},#[fg=#8be9fd],#{?#{==:#{@ai_agent},dr},#[fg=#ff79c6],#{?#{==:#{@ai_agent},pi},#[fg=#f1fa8c],}}}}} #{pane_title} #[default]'
+
+# Every tmux call routes through here (${=...} forces word-splitting: zsh does
+# not split unquoted expansions, and "-L ailsmoke" must be two argv words).
+_ail_tmux() { command tmux ${=AIL_SOCKET:+-L $AIL_SOCKET} "$@" }
+
+# _ail_agent_panes — "pane_id|pane_title" per agent pane, sorted by numeric
+# pane id (ids are monotonic since server start = spawn order).
+_ail_agent_panes() {
+  _ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_agent}' \
+    -F '#{pane_id}|#{pane_title}' 2>/dev/null | sort -t'|' -k1.2,1n
+}
+
+# _ail_deck_count — distinct isengard windows currently holding agent panes.
+_ail_deck_count() {
+  _ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_agent}' \
+    -F '#{window_id}' 2>/dev/null | sort -u | wc -l | tr -d ' '
+}
+
+# _ail_deck_borders <window> — deck modes read agent identity off the pane
+# border (the tab only says dN). Applied per deck window with -w: tmux ≥3.0
+# has no session-scope storage for window options (set-option -t session
+# resolves to the session's CURRENT window only), and per-window beats it
+# anyway — non-agent windows in isengard keep their border settings too.
+_ail_deck_borders() {
+  _ail_tmux set-option -w -t "$1" pane-border-status top 2>/dev/null
+  _ail_tmux set-option -w -t "$1" pane-border-format "$AIL_BORDER_FMT" 2>/dev/null
+}
+
+_ail_main() {
+  local n="${1:-}"
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "ail: tmux not installed" >&2
+    return 1
+  fi
+  if ! _ail_tmux has-session -t "=$AIL_SESSION" 2>/dev/null; then
+    echo "ail: no '$AIL_SESSION' session — spawn an agent first" >&2
+    return 1
+  fi
+
+  # ---- no args: one-line status ----
+  if [[ -z "$n" ]]; then
+    local mode agents
+    # NB: set-option/show-options take a target-PANE — exact-match needs
+    # "=name:" (trailing colon); bare "=name" fails with "no such session".
+    mode=$(_ail_tmux show-options -v -t "=$AIL_SESSION:" @ai_mode 2>/dev/null)
+    agents=$(_ail_agent_panes | wc -l | tr -d ' ')
+    print -r -- "mode ${mode:--} · $agents agents · $(_ail_deck_count) decks"
+    return 0
+  fi
+
+  if [[ "$n" != <-> ]] || (( n < 1 )); then
+    echo "usage: ail [N]   (N >= 1)" >&2
+    return 1
+  fi
+
+  # Mode is declared intent, recorded even with zero agents: the spawn-side
+  # auto-pack (_ai_run) reads @ai_mode before the first agent exists.
+  _ail_tmux set-option -t "=$AIL_SESSION:" @ai_mode "$n"
+
+  # ---- collect agent panes in spawn order ----
+  local -a ids titles
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    ids+=("${line%%|*}")
+    titles+=("${line#*|}")
+  done < <(_ail_agent_panes)
+
+  local -i total=${#ids}
+  if (( total == 0 )); then
+    print -r -- "ail: no agent panes in $AIL_SESSION — nothing to pack"
+    return 0
+  fi
+
+  # Save focus: mode switches must not cost a manual navigation afterwards.
+  # NB: display-message takes a target-PANE — exact-match needs "=name:"
+  # (trailing colon); bare "=name" silently returns empty.
+  local saved_pane
+  saved_pane=$(_ail_tmux display-message -p -t "=$AIL_SESSION:" '#{pane_id}' 2>/dev/null)
+
+  # Unzoom guard: resize-pane -Z is a TOGGLE — only touch windows that report
+  # zoomed, or we would zoom the unzoomed ones. Scoped to windows holding agent
+  # panes: a zoomed plain-shell window is not ours to unzoom (non-agent immunity).
+  local agent_wins win flag
+  agent_wins=$(_ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_agent}' -F '#{window_id}' 2>/dev/null | sort -u)
+  while read -r win flag; do
+    [[ "$flag" == 1 ]] || continue
+    grep -qxF "$win" <<< "$agent_wins" || continue
+    _ail_tmux resize-pane -Z -t "$win" 2>/dev/null
+  done < <(_ail_tmux list-windows -t "=$AIL_SESSION" -F '#{window_id} #{window_zoomed_flag}' 2>/dev/null)
+
+  # ---- re-pack, chunk by chunk ----
+  local -i decks=$(( (total + n - 1) / n ))
+  local -i di k start end formed
+  local pid info anchor last uw wpanes
+  local -a live live_wins chunk_titles
+
+  for (( di = 1; di <= decks; di++ )); do
+    start=$(( (di - 1) * n + 1 ))
+    end=$(( di * n )); (( end > total )) && end=total
+
+    # Re-verify liveness pane by pane: agents can exit mid-run — skip, never abort.
+    live=(); live_wins=(); chunk_titles=()
+    for (( k = start; k <= end; k++ )); do
+      pid="${ids[$k]}"
+      info=$(_ail_tmux display-message -p -t "$pid" '#{window_id}' 2>/dev/null) || continue
+      [[ -z "$info" ]] && continue
+      live+=("$pid")
+      live_wins+=("$info")
+      chunk_titles+=("${titles[$k]}")
+    done
+    (( ${#live} == 0 )) && continue
+
+    # Mode 1: canonicalize with skip — panes already solo stay put (no flicker,
+    # idempotent); tab name = pane title (manual rename disables auto-rename).
+    if (( n == 1 )); then
+      wpanes=$(_ail_tmux display-message -p -t "${live[1]}" '#{window_panes}' 2>/dev/null)
+      if (( ${wpanes:-1} > 1 )); then
+        _ail_tmux break-pane -d -s "${live[1]}" -t "=$AIL_SESSION:" 2>/dev/null || continue
+      fi
+      _ail_tmux rename-window -t "${live[1]}" "${chunk_titles[1]}" 2>/dev/null
+      # Solo window: the tab carries the identity — border row off.
+      _ail_tmux set-option -w -t "${live[1]}" pane-border-status off 2>/dev/null
+      continue
+    fi
+
+    # Already-formed deck (one window, exactly these panes, spawn order):
+    # rename + relayout only — zero break/join, so `ail N` twice is a no-op.
+    formed=1
+    uw="${live_wins[1]}"
+    for (( k = 2; k <= ${#live}; k++ )); do
+      [[ "${live_wins[$k]}" == "$uw" ]] || { formed=0; break }
+    done
+    if (( formed )) && [[ "$(_ail_tmux list-panes -t "$uw" -F '#{pane_id}' 2>/dev/null | tr '\n' ' ')" != "${(j: :)live} " ]]; then
+      formed=0
+    fi
+    if (( formed )); then
+      _ail_tmux rename-window -t "$uw" "d$di" 2>/dev/null
+      _ail_tmux select-layout -t "$uw" even-horizontal 2>/dev/null
+      _ail_deck_borders "$uw"
+      continue
+    fi
+
+    # Re-form: canonicalize (break out panes sharing a window; solo panes stay
+    # put — non-agent siblings are left behind untouched), then join in spawn
+    # order. Joining after the PREVIOUS pane, not the anchor, preserves order:
+    # join-pane inserts the src right after its target.
+    for (( k = 1; k <= ${#live}; k++ )); do
+      pid="${live[$k]}"
+      wpanes=$(_ail_tmux display-message -p -t "$pid" '#{window_panes}' 2>/dev/null) || continue
+      (( ${wpanes:-1} > 1 )) && _ail_tmux break-pane -d -s "$pid" -t "=$AIL_SESSION:" 2>/dev/null
+    done
+    anchor="${live[1]}"
+    _ail_tmux rename-window -t "$anchor" "d$di" 2>/dev/null
+    last="$anchor"
+    for (( k = 2; k <= ${#live}; k++ )); do
+      pid="${live[$k]}"
+      _ail_tmux join-pane -d -h -s "$pid" -t "$last" 2>/dev/null || continue
+      # Re-layout after every join: join-pane halves the TARGET pane, so
+      # repeated joins starve width long before even-horizontal would.
+      _ail_tmux select-layout -t "$anchor" even-horizontal 2>/dev/null
+      last="$pid"
+    done
+    _ail_deck_borders "$anchor"
+  done
+
+  # ---- bookkeeping ----
+
+  # Drained decks: a re-pack can leave a window that lost its agent panes (a
+  # manual split inside a deck) still wearing its ail-given dN name — hand
+  # naming back to tmux so window names stay unambiguous.
+  local wname
+  agent_wins=$(_ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_agent}' -F '#{window_id}' 2>/dev/null | sort -u)
+  while read -r win wname; do
+    [[ "$wname" == d<-> ]] || continue
+    grep -qxF "$win" <<< "$agent_wins" && continue
+    _ail_tmux set-option -w -t "$win" automatic-rename on 2>/dev/null
+  done < <(_ail_tmux list-windows -t "=$AIL_SESSION" -F '#{window_id} #{window_name}' 2>/dev/null)
+
+  # Restore focus, skipping if the saved pane died mid-run.
+  if [[ -n "$saved_pane" ]] && \
+     _ail_tmux list-panes -s -t "=$AIL_SESSION" -F '#{pane_id}' 2>/dev/null | grep -qxF "$saved_pane"; then
+    _ail_tmux select-window -t "$saved_pane" 2>/dev/null
+    _ail_tmux select-pane -t "$saved_pane" 2>/dev/null
+  fi
+
+  # ---- feedback: in-tmux flash when a client is attached; always stdout ----
+  local agents attached msg
+  agents=$(_ail_agent_panes | wc -l | tr -d ' ')
+  msg="ail: mode $n · $agents agents · $(_ail_deck_count) decks"
+  attached=$(_ail_tmux display-message -p -t "=$AIL_SESSION:" '#{session_attached}' 2>/dev/null)
+  (( ${attached:-0} > 0 )) && _ail_tmux display-message "$msg" 2>/dev/null
+  print -r -- "$msg"
+}
+
+_ail_main "$@"

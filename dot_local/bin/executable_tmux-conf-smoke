@@ -1,0 +1,180 @@
+#!/usr/bin/env zsh
+# tmux-conf-smoke: smoke test for ~/.tmux.conf on an ISOLATED tmux server.
+#
+# SAFETY: the default tmux server carries live agent sessions — every tmux call
+# in this file runs on a private socket (tmux -L confsmoke). The server loads
+# the conf under test with HOME redirected to a throwaway dir, so the TPM
+# if-shell misses (no plugins load) and continuum can never write into the real
+# ~/.tmux/resurrect. The EXIT trap kills ONLY that server; no command in this
+# file ever addresses the default server. Never assert on #(...) status
+# substitutions — those subcommands run without -L and read the default server.
+#
+# CONF defaults to the real ~/.tmux.conf, resolved BEFORE any HOME override;
+# override for RED reproduction: CONF=/path/to/old.conf tmux-conf-smoke.
+# Prints PASS/FAIL per check; exits 1 if any check failed.
+
+typeset -g SOCK=confsmoke
+typeset -g CONF="${CONF:-$HOME/.tmux.conf}"
+
+# Every tmux call in this file goes through T: private socket, no user config
+# (-f is only read at server start; harmless on later calls — the real conf is
+# loaded once, explicitly, at the server-start line below).
+T() { command tmux -L "$SOCK" -f /dev/null "$@" }
+
+typeset -g TMPROOT
+TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/tmux-conf-smoke.XXXXXX") || exit 1
+cleanup() { command tmux -L "$SOCK" kill-server 2>/dev/null; rm -rf "$TMPROOT"; true }
+trap cleanup EXIT
+# INT/TERM: cleanup alone would RESUME the script against a dead server,
+# cascading misleading FAILs — terminate explicitly.
+trap 'cleanup; exit 130' INT TERM
+command tmux -L "$SOCK" kill-server 2>/dev/null   # stale server from a previous run
+
+# ---- assertions ----
+
+typeset -gi fails=0
+pass() { print -r -- "PASS: $1" }
+fail() { print -r -- "FAIL: $1"; (( ++fails )) }
+# check <desc> <want> <got>
+check() {
+  if [[ "$3" == "$2" ]]; then pass "$1"; else fail "$1 — want [$2] got [$3]"; fi
+}
+# has <desc> <needle> <haystack> / lacks <desc> <needle> <haystack>
+has() {
+  if [[ "$3" == *"$2"* ]]; then pass "$1"; else fail "$1 — want substring [$2] in [$3]"; fi
+}
+lacks() {
+  if [[ "$3" != *"$2"* ]]; then pass "$1"; else fail "$1 — substring [$2] must be gone from [$3]"; fi
+}
+
+# ---- helpers ----
+
+# key_cmd <key> — the command bound to <key> in the root table ("" if unbound).
+# list-keys re-serializes with its own quoting ($ escaped as \$, '' → ""), so
+# callers match substrings, not the conf's original spelling.
+key_cmd() {
+  T list-keys -T root 2>/dev/null \
+    | awk -v k="$1" '$1 == "bind-key" && $2 == "-T" && $3 == "root" && $4 == k {
+        sub(/^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +/, ""); print; exit }'
+}
+
+opt()  { T show-options -g -v "$1" 2>/dev/null }
+wopt() { T show-options -g -w -v "$1" 2>/dev/null }
+
+# ---- case 1: conf parses, server starts ----
+
+env HOME="$TMPROOT" command tmux -L "$SOCK" -f "$CONF" \
+  new-session -d -s t -x 220 -y 50 'sleep 600'
+check "case 1: server starts with conf" "0" "$?"
+# Startup swallows parse errors (exit 0 regardless) — source-file is the real
+# parse gate (rc 1 on any error; re-applying is harmless on this throwaway
+# server, and its HOME is still the redirect so TPM keeps missing).
+T source-file "$CONF" >/dev/null 2>&1
+check "case 1: conf parses clean (source-file rc)" "0" "$?"
+
+# ---- case 2: navigation rebinds — M-Left/M-Right hop panes ----
+
+check "case 2: M-Left → select-pane -L" "select-pane -L" "$(key_cmd M-Left)"
+check "case 2: M-Right → select-pane -R" "select-pane -R" "$(key_cmd M-Right)"
+
+# ---- case 3: new binds — zoom, rename, ail modes ----
+
+check "case 3: M-z → resize-pane -Z" "resize-pane -Z" "$(key_cmd M-z)"
+mr="$(key_cmd M-r)"
+has "case 3: M-r → rename prompt (command-prompt)" 'command-prompt' "$mr"
+has "case 3: M-r prefills #W via -I" '-I "#W"' "$mr"
+has "case 3: M-r runs rename-window" 'rename-window' "$mr"
+typeset -i n
+for n in 1 2 8; do
+  # \$HOME literal: run-shell must defer expansion to /bin/sh — the tmux
+  # server's PATH may lack ~/.local/bin, and conf-time expansion would bake in
+  # whatever HOME the server started with.
+  has "case 3: M-$n → run-shell ail $n by \$HOME path" \
+    '\$HOME/.local/bin/ail '"$n" "$(key_cmd M-$n)"
+  # stdout must be silenced: run-shell renders any output as a view-mode
+  # overlay on the focused pane — every mode switch would steal keystrokes.
+  has "case 3: M-$n silences ail stdout (no view-mode overlay)" \
+    '>/dev/null' "$(key_cmd M-$n)"
+done
+
+# ---- case 4: retired binds — session axis off the root table ----
+
+check "case 4: M-o unbound" "" "$(key_cmd M-o)"
+check "case 4: M-p unbound" "" "$(key_cmd M-p)"
+
+# ---- case 5: untouched binds ----
+
+check "case 5: S-Left → previous-window" "previous-window" "$(key_cmd S-Left)"
+check "case 5: S-Right → next-window" "next-window" "$(key_cmd S-Right)"
+check "case 5: M-q → previous-window" "previous-window" "$(key_cmd M-q)"
+check "case 5: M-w → next-window" "next-window" "$(key_cmd M-w)"
+
+# ---- case 6: M-y popup runs plain yazi (3.7 fixed tmux/tmux#4942) ----
+
+my="$(key_cmd M-y)"
+has "case 6: M-y popup runs yazi" 'yazi' "$my"
+lacks "case 6: M-y nested-session workaround reverted" 'new-session' "$my"
+
+# ---- case 7: tab bar options ----
+
+check "case 7: status-position top" "top" "$(opt status-position)"
+wsf="$(opt window-status-format)"
+if [[ -n "$wsf" ]]; then
+  pass "case 7: window-status-format non-empty"
+else
+  fail "case 7: window-status-format non-empty — got []"
+fi
+has "case 7: window-status-format colors on m:cc match" 'm:cc' "$wsf"
+has "case 7: window-status-current-format on bd93f9" 'bd93f9' "$(opt window-status-current-format)"
+has "case 7: status-left shows @ai_mode" '@ai_mode' "$(opt status-left)"
+has "case 7: status-right counts @ai_agent panes" '@ai_agent' "$(opt status-right)"
+
+# ---- case 8: attention signal ----
+
+check "case 8: bell-action any" "any" "$(opt bell-action)"
+# NB: monitor-bell defaults on in tmux 3.7 — this passes even before the conf
+# sets it explicitly; kept as a regression guard against a future 'off'.
+check "case 8: monitor-bell on" "on" "$(wopt monitor-bell)"
+check "case 8: monitor-activity off (tabs must not flag on TUI redraws)" "off" "$(wopt monitor-activity)"
+has "case 8: window-status-bell-style is the orange flag" 'ffb86c' "$(opt window-status-bell-style)"
+
+# ---- case 9: allow-rename off (nothing renames via \ek anymore) ----
+
+check "case 9: allow-rename off" "off" "$(opt allow-rename)"
+
+# ---- case 10: format-render sanity — the conditional chain expands ----
+
+# Windows named like an agent tab (cc:x) and a deck tab (d1); target by pane
+# id — a ':' inside a window name breaks session:window target parsing.
+cc_pane=$(T new-window -d -t '=t:' -n 'cc:x' -PF '#{pane_id}' 'sleep 600')
+d1_pane=$(T new-window -d -t '=t:' -n 'd1' -PF '#{pane_id}' 'sleep 600')
+cc_out=$(T display-message -p -t "$cc_pane" "$wsf" 2>/dev/null)
+d1_out=$(T display-message -p -t "$d1_pane" "$wsf" 2>/dev/null)
+has "case 10: cc:x tab renders name" 'cc:x' "$cc_out"
+has "case 10: cc:x tab picks agent orange" 'ffb86c' "$cc_out"
+has "case 10: d1 tab renders name" 'd1' "$d1_out"
+has "case 10: d1 tab falls through to dim" '6272a4' "$d1_out"
+lacks "case 10: d1 tab is not agent-colored" 'ffb86c' "$d1_out"
+
+# Bell-flagged tab: the fg chain must yield to window-status-bell-style —
+# an agent-colored fg on the orange bell bg renders fg==bg (invisible tab).
+bell_pane=$(T new-window -d -t '=t:' -n 'cc:bell' -PF '#{pane_id}' "printf '\\a'; sleep 600")
+typeset -i i
+for i in {1..30}; do
+  [[ "$(T display-message -p -t "$bell_pane" '#{window_bell_flag}' 2>/dev/null)" == 1 ]] && break
+  sleep 0.1
+done
+check "case 10: BEL sets window_bell_flag" "1" \
+  "$(T display-message -p -t "$bell_pane" '#{window_bell_flag}' 2>/dev/null)"
+bell_out=$(T display-message -p -t "$bell_pane" "$wsf" 2>/dev/null)
+has "case 10: flagged tab renders name" 'cc:bell' "$bell_out"
+lacks "case 10: flagged tab yields fg to bell style (no orange-on-orange)" 'fg=#ffb86c' "$bell_out"
+
+# ---- summary ----
+
+print -r -- "----"
+if (( fails > 0 )); then
+  print -r -- "tmux-conf-smoke: $fails check(s) FAILED"
+  exit 1
+fi
+print -r -- "tmux-conf-smoke: all checks passed"

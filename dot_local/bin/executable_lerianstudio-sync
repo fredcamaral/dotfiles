@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# lerianstudio-sync — sync all lerianstudio org repos under ~/repos/lerianstudio.
+#
+# Default mode never touches any worktree — safe to run while agents are
+# editing. Per repo:
+#   missing locally                  -> clone
+#   existing                         -> fetch --prune only (worktree untouched)
+#   empty on GitHub                  -> skip
+#   archived on GitHub               -> ignored entirely (lives in .archive/)
+#
+# --pull: additionally fast-forward repos that are clean AND on the default
+#   branch (git pull --ff-only). Dirty or non-default-branch repos stay
+#   PROTECTED (fetch only). Never switches branches.
+#
+# Override base dir with LERIAN_REPOS. Exit code 1 if any repo failed.
+set -u
+set -o pipefail
+
+BASE="${LERIAN_REPOS:-$HOME/repos/lerianstudio}"
+ORG="lerianstudio"
+JOBS=8
+FETCH_ONLY=1
+[ "${1:-}" = "--pull" ] && FETCH_ONLY=0
+LOG="$(mktemp -t lerianstudio-sync)"
+TSV="$(mktemp -t lerianstudio-repos)"
+trap 'rm -f "$TSV"' EXIT
+
+sync_one() {
+  local name="$1" default="$2" d out branch
+  d="$BASE/$name"
+
+  if [ ! -d "$d" ]; then
+    if gh repo clone "$ORG/$name" "$d" -- --quiet >/dev/null 2>&1; then
+      echo "CLONED     $name" >>"$LOG"
+    else
+      echo "FAIL       $name :: clone failed" >>"$LOG"
+    fi
+    return
+  fi
+
+  if [ -z "$default" ]; then
+    echo "SKIPPED    $name :: empty repo on GitHub" >>"$LOG"
+    return
+  fi
+
+  if [ "$FETCH_ONLY" = "1" ]; then
+    if git -C "$d" fetch --prune --quiet 2>/dev/null; then
+      echo "FETCHED    $name" >>"$LOG"
+    else
+      echo "FAIL       $name :: fetch failed" >>"$LOG"
+    fi
+    return
+  fi
+
+  branch="$(git -C "$d" branch --show-current 2>/dev/null)"
+  local why=""
+  [ "$branch" != "$default" ] && why="on '$branch'"
+  if [ -n "$(git -C "$d" status --porcelain 2>/dev/null)" ]; then
+    why="${why:+$why, }dirty worktree"
+  fi
+  if [ -n "$why" ]; then
+    if git -C "$d" fetch --prune --quiet 2>/dev/null; then
+      echo "PROTECTED  $name :: $why, fetch only" >>"$LOG"
+    else
+      echo "FAIL       $name :: fetch failed" >>"$LOG"
+    fi
+    return
+  fi
+
+  if out=$(git -C "$d" pull --ff-only 2>&1); then
+    echo "UPDATED    $name" >>"$LOG"
+  else
+    echo "FAIL       $name :: $(echo "$out" | tail -1)" >>"$LOG"
+  fi
+}
+
+echo "Fetching repo list for $ORG..."
+if ! gh repo list "$ORG" --limit 1000 --json name,defaultBranchRef,isArchived \
+  --jq '.[] | select(.isArchived | not) | "\(.name)\t\(.defaultBranchRef.name // "")"' >"$TSV"; then
+  echo "FATAL: failed to fetch repo list from GitHub (is 'gh' authenticated? run 'gh auth status')" >&2
+  exit 1
+fi
+if [ ! -s "$TSV" ]; then
+  echo "FATAL: repo list is empty — aborting (check org name '$ORG' and 'gh' auth)" >&2
+  exit 1
+fi
+echo "$(wc -l <"$TSV" | tr -d ' ') repos, syncing with $JOBS workers..."
+
+while IFS=$'\t' read -r name default; do
+  [ -z "$name" ] && continue
+  while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do sleep 0.2; done
+  sync_one "$name" "$default" &
+done <"$TSV"
+wait
+
+echo
+sort "$LOG" | awk '{print $1}' | uniq -c
+grep -E "^(PROTECTED|FAIL|SKIPPED|CLONED)" "$LOG" | sort || true
+echo
+echo "Full log: $LOG"
+grep -q "^FAIL" "$LOG" && exit 1
+exit 0

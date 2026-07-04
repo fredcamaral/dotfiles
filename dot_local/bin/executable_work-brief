@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+"""work-brief — extract a compact per-repo digest of recent coding-agent activity.
+
+Scans transcripts from Claude Code, Droid (Factory), and OpenCode for the last
+N days (default: today + yesterday) and emits a compact, per-repo digest to
+stdout. The digest is meant to be handed to an LLM (Hermes) that turns it into a
+"3 bullets per repo" brief so Fred can pick the thread back up.
+
+It deliberately does NOT dump full transcripts — it extracts, per repo:
+  - which tools touched it and when (last activity)
+  - the user's own prompts (strongest signal of intent)
+  - the last thing the assistant said (where it left off)
+
+Sources:
+  Claude Code  ~/.claude/projects/<repo-slug>/*.jsonl   (JSONL, cwd = repo)
+  Droid        ~/.factory/sessions/<repo-slug>/*.jsonl   (JSONL)
+  OpenCode     ~/.local/share/opencode/opencode.db       (SQLite: session/message/part)
+
+Usage: work-brief [--days N]   (default N=2 calendar days: today + yesterday)
+Env:   WORK_BRIEF_DAYS overrides default day count.
+"""
+import os
+import sys
+import json
+import glob
+import time
+import sqlite3
+import subprocess
+import datetime as dt
+from collections import defaultdict
+
+# ensure git/sqlite3 are found even in a fresh (non-zsh) session
+os.environ["PATH"] = "/opt/homebrew/bin:" + os.environ.get("PATH", "")
+
+HOME = os.path.expanduser("~")
+
+# ---- window --------------------------------------------------------------
+def parse_days():
+    days = int(os.environ.get("WORK_BRIEF_DAYS", "2"))
+    argv = sys.argv[1:]
+    if "--days" in argv:
+        i = argv.index("--days")
+        try:
+            days = int(argv[i + 1])
+        except (IndexError, ValueError):
+            pass
+    return max(1, days)
+
+DAYS = parse_days()
+# cutoff = midnight local, (DAYS-1) days ago. DAYS=2 -> today + yesterday.
+_today_midnight = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+CUTOFF_DT = _today_midnight - dt.timedelta(days=DAYS - 1)
+CUTOFF_TS = CUTOFF_DT.timestamp()
+
+MAX_PROMPTS_PER_REPO = 8      # cap user prompts we keep per repo
+MAX_PROMPT_CHARS = 240        # truncate each prompt
+MAX_ASSISTANT_CHARS = 400     # truncate the "last thing assistant said"
+
+# repo entry: {tools:set, last_ts:float, prompts:[(ts,text)], last_assistant:(ts,text), path:str}
+repos = defaultdict(lambda: {
+    "tools": set(),
+    "last_ts": 0.0,
+    "prompts": [],
+    "last_assistant": (0.0, ""),
+    "path": "",
+})
+
+def clean(text, limit):
+    if not isinstance(text, str):
+        return ""
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    return text
+
+def repo_from_path(p):
+    """Map an absolute working dir to a short repo label."""
+    if not p:
+        return "(unknown)"
+    p = p.rstrip("/")
+    # sessions run straight from home or a non-repo dir aren't a work front
+    if p in (HOME, "/home/fredamaral") or p == os.path.dirname(HOME):
+        return "(avulso: home)"
+    base = os.path.basename(p)
+    parent = os.path.basename(os.path.dirname(p))
+    # e.g. .../repos/lerianstudio/matcher -> lerianstudio/matcher
+    if parent and parent not in ("repos", "", HOME.split("/")[-1]):
+        return f"{parent}/{base}"
+    return base or "(unknown)"
+
+def slug_to_repo(slug):
+    """Claude/Droid encode the cwd as -Users-fredamaral-repos-org-name."""
+    parts = slug.strip("-").split("-")
+    # take everything after 'repos' if present
+    if "repos" in parts:
+        tail = parts[parts.index("repos") + 1:]
+        if len(tail) >= 2:
+            return f"{tail[0]}/{'-'.join(tail[1:])}"
+        if tail:
+            return tail[0]
+    return slug
+
+NOISE_PREFIXES = (
+    "<local-command", "caveat:", "<command-name>", "<command-message>",
+    "<task-notification>", "<bash-input>", "<bash-stdout>", "<bash-stderr>",
+    "another claude session sent a message", "<teammate-message",
+    "this session is being continued", "stop hook feedback:",
+    "base directory for this skill", "[request interrupted",
+    "<system-reminder>", "<local-command-stdout>",
+)
+NOISE_CONTAINS = (
+    "background agents were stopped", "idle_notification",
+    "were stopped by the user", "<command-args>",
+)
+
+def is_noise(text):
+    low = text.lower().lstrip()
+    if any(low.startswith(p) for p in NOISE_PREFIXES):
+        return True
+    if any(c in low for c in NOISE_CONTAINS):
+        return True
+    # skill/plugin dumps: long text starting with a markdown header after a path
+    if low.startswith("#") and len(text) > 200:
+        return True
+    return False
+
+def add_prompt(repo, ts, text):
+    text = clean(text, MAX_PROMPT_CHARS)
+    if not text or is_noise(text):
+        return
+    repos[repo]["prompts"].append((ts, text))
+    repos[repo]["last_ts"] = max(repos[repo]["last_ts"], ts)
+
+def add_assistant(repo, ts, text):
+    text = clean(text, MAX_ASSISTANT_CHARS)
+    if not text:
+        return
+    if ts >= repos[repo]["last_assistant"][0]:
+        repos[repo]["last_assistant"] = (ts, text)
+    repos[repo]["last_ts"] = max(repos[repo]["last_ts"], ts)
+
+def iso_to_ts(s):
+    try:
+        return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+def git_status(path):
+    """Return a compact git state string for a repo, or '' if not a repo/clean-unknown.
+
+    Reports: current branch, dirty file count, and ahead/behind vs upstream.
+    Fast: all porcelain, no network. Guarded with a short timeout.
+    """
+    if not path or not os.path.isdir(os.path.join(path, ".git")):
+        # could be a worktree (.git is a file) — still try
+        if not path or not os.path.isdir(path):
+            return ""
+    def run(args):
+        try:
+            r = subprocess.run(
+                ["git", "-C", path] + args,
+                capture_output=True, text=True, timeout=5,
+            )
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except (subprocess.SubprocessError, OSError):
+            return ""
+    branch = run(["branch", "--show-current"]) or "(detached)"
+    porcelain = run(["status", "--porcelain"])
+    dirty = len([l for l in porcelain.splitlines() if l.strip()]) if porcelain else 0
+    # ahead/behind vs upstream
+    ahead = behind = 0
+    counts = run(["rev-list", "--left-right", "--count", "@{upstream}...HEAD"])
+    if counts and "\t" in counts:
+        try:
+            behind, ahead = (int(x) for x in counts.split("\t"))
+        except ValueError:
+            pass
+    parts = [f"branch: {branch}"]
+    if dirty:
+        parts.append(f"{dirty} uncommitted file(s)")
+    if ahead:
+        parts.append(f"{ahead} unpushed commit(s)")
+    if behind:
+        parts.append(f"{behind} behind")
+    if not dirty and not ahead:
+        parts.append("clean")
+    return " | ".join(parts)
+
+def content_to_text(content):
+    """Claude/Droid message.content is str or list of blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out = []
+        for b in content:
+            if isinstance(b, dict):
+                if b.get("type") == "text":
+                    out.append(b.get("text", ""))
+                elif b.get("type") == "tool_result":
+                    pass  # skip tool noise
+            elif isinstance(b, str):
+                out.append(b)
+        return " ".join(out)
+    return ""
+
+# ---- Claude Code ---------------------------------------------------------
+def scan_jsonl_tree(root, tool_name):
+    if not os.path.isdir(root):
+        return
+    # only top-level session files, skip subagents dir
+    for slug_dir in os.listdir(root):
+        d = os.path.join(root, slug_dir)
+        if not os.path.isdir(d):
+            continue
+        for f in glob.glob(os.path.join(d, "*.jsonl")):
+            try:
+                if os.path.getmtime(f) < CUTOFF_TS:
+                    continue
+            except OSError:
+                continue
+            scan_jsonl_file(f, tool_name, slug_dir)
+
+def scan_jsonl_file(path, tool_name, slug_dir):
+    repo_hint = None
+    try:
+        with open(path, "r", errors="ignore") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = iso_to_ts(d.get("timestamp", "")) if d.get("timestamp") else 0.0
+                cwd = d.get("cwd")
+                if cwd:
+                    repo_hint = repo_from_path(cwd)
+                repo = repo_hint or slug_to_repo(slug_dir)
+                if cwd and os.path.isdir(cwd):
+                    repos[repo]["path"] = cwd
+                msg = d.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role")
+                if ts and ts < CUTOFF_TS:
+                    continue
+                text = content_to_text(msg.get("content"))
+                if role == "user":
+                    repos[repo]["tools"].add(tool_name)
+                    add_prompt(repo, ts, text)
+                elif role == "assistant":
+                    repos[repo]["tools"].add(tool_name)
+                    add_assistant(repo, ts, text)
+    except OSError:
+        return
+
+# ---- OpenCode (SQLite) ---------------------------------------------------
+def scan_opencode():
+    db = os.path.join(HOME, ".local/share/opencode/opencode.db")
+    if not os.path.exists(db):
+        return
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        con.execute("PRAGMA busy_timeout=3000")
+        cur = con.cursor()
+        cutoff_ms = int(CUTOFF_TS * 1000)
+        rows = cur.execute(
+            "SELECT id, directory, time_updated FROM session "
+            "WHERE time_updated > ? ORDER BY time_updated DESC LIMIT 40",
+            (cutoff_ms,),
+        ).fetchall()
+        for sid, directory, tupd in rows:
+            repo = repo_from_path(directory)
+            repos[repo]["tools"].add("opencode")
+            if directory and os.path.isdir(directory):
+                repos[repo]["path"] = directory
+            ts = (tupd or 0) / 1000.0
+            repos[repo]["last_ts"] = max(repos[repo]["last_ts"], ts)
+            # pull user text parts + last assistant text for this session
+            try:
+                parts = cur.execute(
+                    "SELECT p.data, m.data, p.time_created "
+                    "FROM part p JOIN message m ON p.message_id = m.id "
+                    "WHERE p.session_id = ? AND p.data LIKE '%\"type\":\"text\"%' "
+                    "ORDER BY p.time_created",
+                    (sid,),
+                ).fetchall()
+            except sqlite3.Error:
+                parts = []
+            last_asst = None
+            for pdata, mdata, ptc in parts:
+                try:
+                    pj = json.loads(pdata)
+                    mj = json.loads(mdata)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                txt = pj.get("text", "")
+                role = mj.get("role")
+                pts = (ptc or 0) / 1000.0
+                if role == "user":
+                    add_prompt(repo, pts, txt)
+                elif role == "assistant":
+                    last_asst = (pts, txt)
+            if last_asst:
+                add_assistant(repo, last_asst[0], last_asst[1])
+        con.close()
+    except sqlite3.Error as e:
+        print(f"# (opencode scan skipped: {e})", file=sys.stderr)
+
+# ---- run -----------------------------------------------------------------
+def main():
+    scan_jsonl_tree(os.path.join(HOME, ".claude/projects"), "claude")
+    scan_jsonl_tree(os.path.join(HOME, ".factory/sessions"), "droid")
+    scan_opencode()
+
+    # a repo is "active" only if it has at least one real human prompt —
+    # otherwise it is pure subagent/task-notification noise
+    active = {r: v for r, v in repos.items()
+              if v["last_ts"] > 0 and v["prompts"]}
+    if not active:
+        print("NO_ACTIVITY")
+        print(f"# window: since {CUTOFF_DT:%Y-%m-%d %H:%M} ({DAYS} day(s))")
+        return
+
+    ordered = sorted(active.items(), key=lambda kv: kv[1]["last_ts"], reverse=True)
+
+    now = time.time()
+    # collect git status in parallel (git on ~17 repos is the slow part)
+    from concurrent.futures import ThreadPoolExecutor
+    paths = {r: v.get("path", "") for r, v in ordered
+             if v.get("path") and not r.startswith("(")}
+    git_map = {}
+    if paths:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(git_status, p): r for r, p in paths.items()}
+            for fut in futs:
+                try:
+                    git_map[futs[fut]] = fut.result()
+                except Exception:
+                    git_map[futs[fut]] = ""
+
+    print(f"# work-brief digest | window: since {CUTOFF_DT:%Y-%m-%d %H:%M} "
+          f"({DAYS} day(s)) | {len(ordered)} active repo(s)")
+    print()
+    for repo, v in ordered:
+        last = v["last_ts"]
+        ago_h = (now - last) / 3600.0
+        when = f"{ago_h:.1f}h ago" if ago_h < 48 else f"{ago_h/24:.1f}d ago"
+        tools = ",".join(sorted(v["tools"]))
+        print(f"## {repo}  [{tools}]  last: {when}")
+        gs = git_map.get(repo, "")
+        if gs:
+            print(f"  - GIT: {gs}")
+        # dedupe prompts, keep chronological, cap
+        seen = set()
+        prompts = []
+        for ts, txt in sorted(v["prompts"]):
+            if txt in seen:
+                continue
+            seen.add(txt)
+            prompts.append(txt)
+        if len(prompts) > MAX_PROMPTS_PER_REPO:
+            head = prompts[: MAX_PROMPTS_PER_REPO - 3]
+            tail = prompts[-3:]
+            prompts = head + ["…"] + tail
+        for p in prompts:
+            print(f"  - USER: {p}")
+        la = v["last_assistant"][1]
+        if la:
+            print(f"  - LAST_ASSISTANT: {la}")
+        print()
+
+if __name__ == "__main__":
+    main()

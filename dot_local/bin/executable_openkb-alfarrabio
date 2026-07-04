@@ -1,0 +1,5 @@
+#!/bin/zsh
+set -euo pipefail
+
+export LLM_API_KEY="${LLM_API_KEY:-${OPENAI_API_KEY:-}}"
+exec "/Users/fredamaral/.local/bin/openkb" --kb-dir "/Users/fredamaral/Documents/Alfarrabio" "$@"

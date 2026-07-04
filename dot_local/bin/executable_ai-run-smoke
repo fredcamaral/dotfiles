@@ -1,0 +1,214 @@
+#!/usr/bin/env zsh
+# ai-run-smoke: smoke test for _ai_run v2 (ai-sessions.sh) on an ISOLATED tmux server.
+#
+# SAFETY: the default tmux server carries live agent sessions — every tmux call
+# in this file runs on a private socket (tmux -L airunsmoke) with -f /dev/null
+# (no user config, hermetic server). The EXIT trap kills ONLY that server; no
+# command in this file ever addresses the default server. _ai_run itself is
+# routed there via the AIL_SOCKET seam, and the driver panes carry a $TMUX that
+# points at the test server.
+#
+# Driver-pane technique: launchers demand a TTY (non-interactive guard) and
+# inside-tmux behavior, so _ai_run runs INSIDE a pane of the test server — each
+# spawn is a throwaway window in a `driver` session running a zsh script that
+# sources ai-sessions.sh and calls _ai_run against a fixture git repo (branch
+# feat/x). Async effects are polled with short sleeps, never long fixed waits.
+# Cases run in sequence and build on each other's state. Prints PASS/FAIL per
+# check; exits 1 if any check failed.
+
+typeset -g SOCK=airunsmoke
+typeset -g AI_SH="${AI_SH:-$HOME/.config/ai-sessions/ai-sessions.sh}"
+typeset -g AIL="${AIL:-$HOME/.local/bin/ail}"
+export AIL_SOCKET="$SOCK"
+
+# Every tmux call in this file goes through T: private socket, no user config
+# (-f is only read at server start; harmless on later calls).
+T() { command tmux -L "$SOCK" -f /dev/null "$@" }
+
+typeset -g TMPROOT
+TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/ai-run-smoke.XXXXXX") || exit 1
+cleanup() { command tmux -L "$SOCK" kill-server 2>/dev/null; rm -rf "$TMPROOT"; true }
+trap cleanup EXIT
+# INT/TERM: cleanup alone would RESUME the script against a dead server,
+# cascading misleading FAILs — terminate explicitly.
+trap 'cleanup; exit 130' INT TERM
+command tmux -L "$SOCK" kill-server 2>/dev/null   # stale server from a previous run
+
+# ---- assertions ----
+
+typeset -gi fails=0
+pass() { print -r -- "PASS: $1" }
+fail() { print -r -- "FAIL: $1"; (( ++fails )) }
+# check <desc> <want> <got>
+check() {
+  if [[ "$3" == "$2" ]]; then pass "$1"; else fail "$1 — want [$2] got [$3]"; fi
+}
+# run_ail <args...> — invoke ail; a non-zero exit is itself a failure.
+run_ail() { "$AIL" "$@" >/dev/null 2>&1 || fail "ail $* exited non-zero" }
+
+# ---- helpers ----
+
+count() { wc -l | tr -d ' ' }
+
+# wait_until <tries> <cmd...> — poll cmd every 0.2s; 0 as soon as it succeeds.
+wait_until() {
+  local -i tries="$1"; shift
+  while (( tries-- > 0 )); do
+    "$@" >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+agent_panes() { T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{pane_id}' 2>/dev/null }
+agent_windows() { T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_id}' 2>/dev/null | sort -u }
+agents_are() { [[ "$(agent_panes | count)" == "$1" ]] }
+agent_windows_are() { [[ "$(agent_windows | count)" == "$1" ]] }
+
+# drive <prefix> <marker> — run _ai_run in a throwaway driver pane: the fake
+# agent echoes <marker> once, then sleeps. cwd = fixture repo (repo/branch
+# identity). A script file (not zsh -ic) keeps quoting flat; the pane's pty
+# supplies the TTY the launcher demands.
+typeset -gi drives=0
+drive() {
+  local scr="$TMPROOT/drive-$(( ++drives )).zsh"
+  cat > "$scr" <<EOF
+export AIL_SOCKET=${(q)SOCK} AI_SESSIONS_DIR=${(q)SESS}
+source ${(q)AI_SH}
+_ai_run $1 zsh -c 'echo $2; sleep 600'
+EOF
+  T new-window -d -t '=driver:' -c "$REPO" "zsh -f ${(q)scr}"
+}
+
+# ---- fixtures: git repo on branch feat/x + temp sessions dir + driver ----
+
+typeset -g REPO="$TMPROOT/repo" SESS="$TMPROOT/sessions"
+mkdir -p "$REPO" "$SESS"
+git -C "$REPO" init -q &&
+  git -C "$REPO" -c user.email=smoke@test -c user.name=smoke -c commit.gpgsign=false \
+      commit -q --allow-empty -m init &&
+  git -C "$REPO" checkout -q -b feat/x \
+  || { echo "ai-run-smoke: cannot build fixture repo" >&2; exit 1 }
+
+T new-session -d -s driver -x 220 -y 50 'sleep 600' \
+  || { echo "ai-run-smoke: cannot start test server" >&2; exit 1 }
+
+# ---- case 1: first spawn creates isengard, tagged + titled + pinned ----
+
+drive cc hello-from-agent
+if wait_until 25 T has-session -t '=isengard'; then
+  pass "case 1: isengard created by first spawn"
+else
+  fail "case 1: isengard never appeared"
+fi
+wait_until 25 agents_are 1
+check "case 1: exactly one agent pane" "1" "$(agent_panes | count)"
+pane="$(agent_panes | head -n1)"
+check "case 1: @ai_agent == cc" "cc" "$(T display-message -p -t "$pane" '#{@ai_agent}' 2>/dev/null)"
+check "case 1: pane title == cc:repo/feat-x" "cc:repo/feat-x" "$(T display-message -p -t "$pane" '#{pane_title}' 2>/dev/null)"
+check "case 1: window named by short name" "cc:repo/feat-x" "$(T display-message -p -t "$pane" '#{window_name}' 2>/dev/null)"
+check "case 1: allow-rename off" "off" "$(T show-options -w -v -t "$pane" allow-rename 2>/dev/null)"
+check "case 1: automatic-rename off" "off" "$(T show-options -w -v -t "$pane" automatic-rename 2>/dev/null)"
+check "case 1: allow-set-title off (OSC titles must not clobber identity)" "off" \
+  "$(T show-options -p -v -t "$pane" allow-set-title 2>/dev/null)"
+
+# ---- case 2: @ai_log → live log file, wired from the first byte ----
+
+logf="$(T display-message -p -t "$pane" '#{@ai_log}' 2>/dev/null)"
+if [[ "$logf" == "$SESS/logs/"*.log ]]; then
+  pass "case 2: @ai_log under temp logs dir"
+else
+  fail "case 2: @ai_log — want $SESS/logs/*.log got [$logf]"
+fi
+if wait_until 25 test -f "$logf"; then
+  pass "case 2: log file exists"
+else
+  fail "case 2: log file [$logf] never appeared"
+fi
+if wait_until 25 grep -q hello-from-agent "$logf"; then
+  pass "case 2: log captured agent output from the first byte"
+else
+  fail "case 2: 'hello-from-agent' never reached the log"
+fi
+
+# ---- case 3: mode preset (ail 2) → spawns auto-pack into decks ----
+
+run_ail 2
+check "case 3: @ai_mode preset to 2" "2" \
+  "$(T show-options -v -t '=isengard:' @ai_mode 2>/dev/null)"
+drive cc hello-agent-2
+wait_until 25 agents_are 2
+check "case 3: second agent spawned" "2" "$(agent_panes | count)"
+wait_until 25 agent_windows_are 1
+check "case 3: auto-pack joined it → 1 deck of 2" "1" "$(agent_windows | count)"
+drive oc hello-agent-3
+wait_until 25 agents_are 3
+check "case 3: third agent spawned" "3" "$(agent_panes | count)"
+wait_until 25 agent_windows_are 2
+dist=$(agent_windows | while IFS= read -r w; do
+         T display-message -p -t "$w" '#{window_panes}'
+       done | sort -n | paste -sd' ' -)
+check "case 3: 3 agents pack 2+1 (deck sizes 1 2)" "1 2" "$dist"
+
+# ---- case 4: mode 1 → a new spawn stays a solo window, no join ----
+
+run_ail 1
+drive cx hello-agent-4
+wait_until 25 agents_are 4
+check "case 4: fourth agent spawned" "4" "$(agent_panes | count)"
+sleep 1   # a wrong auto-pack would join asynchronously — give it the chance
+check "case 4: mode 1 → 4 solo agent windows" "4" "$(agent_windows | count)"
+check "case 4: every agent window has exactly 1 pane" "1" \
+  "$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_panes}' 2>/dev/null | sort -u | paste -sd' ' -)"
+
+# ---- case 4b: same-second twin spawns from ONE shell → distinct logs ----
+# $RANDOM inside a command substitution never advances the parent RNG; without
+# parent-context entropy two same-prefix spawns in one second share a stamped
+# name and silently append to the SAME log file.
+
+scr="$TMPROOT/drive-twin.zsh"
+cat > "$scr" <<EOF
+export AIL_SOCKET=${(q)SOCK} AI_SESSIONS_DIR=${(q)SESS}
+source ${(q)AI_SH}
+_ai_run cc zsh -c 'sleep 600'
+_ai_run cc zsh -c 'sleep 600'
+EOF
+T new-window -d -t '=driver:' -c "$REPO" "zsh -f ${(q)scr}"
+wait_until 25 agents_are 6
+check "case 4b: twin spawns landed" "6" "$(agent_panes | count)"
+shared=$(T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{@ai_log}' 2>/dev/null \
+         | sort | uniq -d | count)
+check "case 4b: no two agents share a log file" "0" "$shared"
+
+# ---- case 5: non-interactive guard — no tty → direct run, no tmux spawn ----
+
+wins_before="$(T list-windows -t '=isengard' -F '#{window_id}' 2>/dev/null | count)"
+agents_before="$(agent_panes | count)"
+out=$(cd "$REPO" && TMUX= AI_SESSIONS_DIR="$SESS" \
+      zsh -fc "source ${(q)AI_SH}; _ai_run cc echo direct-run-ok" </dev/null 2>/dev/null)
+check "case 5: piped _ai_run runs the command direct" "direct-run-ok" "$out"
+check "case 5: no new isengard window" "$wins_before" \
+  "$(T list-windows -t '=isengard' -F '#{window_id}' 2>/dev/null | count)"
+check "case 5: agent pane count unchanged" "$agents_before" "$(agent_panes | count)"
+
+# ---- case 6: hygiene — parses clean, defines the public surface ----
+
+if zsh -n "$AI_SH" 2>/dev/null; then
+  pass "case 6: zsh -n parses clean"
+else
+  fail "case 6: zsh -n reports syntax errors"
+fi
+missing=$(AI_SESSIONS_DIR="$SESS" zsh -fc \
+  'source '"${(q)AI_SH}"'; for f in ai-claude ai-opencode ai-codex ai-droid ai-pi ai-status; do
+     (( $+functions[$f] )) || print -r -- "$f"
+   done' 2>&1)
+check "case 6: fresh zsh -f defines all launchers" "" "$missing"
+
+# ---- summary ----
+
+print -r -- "----"
+if (( fails > 0 )); then
+  print -r -- "ai-run-smoke: $fails check(s) FAILED"
+  exit 1
+fi
+print -r -- "ai-run-smoke: all checks passed"

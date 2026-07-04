@@ -1,0 +1,75 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "~/.factory/hooks/session-start.sh"
+        }
+      ]
+    },
+    {
+      "matcher": "clear|compact|startup|resume",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "~/.factory/hooks/session-start.sh"
+        }
+      ]
+    },
+    {
+      "matcher": "startup|resume",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "~/.factory/hooks/session-start.sh"
+        }
+      ]
+    },
+    {
+      "matcher": "clear|compact",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "~/.factory/hooks/session-start.sh"
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "~/.factory/hooks/claude-md-reminder.sh"
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "codegraph mark-dirty"
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "codegraph sync-if-dirty"
+        }
+      ]
+    }
+  ],
+  "claudeHooksImported": true,
+  "importedClaudeHooks": [
+    "codegraph mark-dirty",
+    "codegraph sync-if-dirty"
+  ]
+}

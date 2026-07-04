@@ -1,0 +1,245 @@
+#!/usr/bin/env zsh
+# deband-smoke: smoke test for the Phase 4 deband — Karabiner split-macro rules
+# deleted, Ghostty goto_split binds removed, everything else untouched.
+#
+# READ-ONLY and idempotent: this script mutates nothing; a green state stays
+# green on rerun. The only tmux commands are read-only `tmux ls` snapshots —
+# the default server carries live agent sessions and is never written to.
+#
+# Compares live files against the Phase 4 backups:
+#   ~/.config/karabiner/karabiner.json   vs karabiner.json.bak
+#   ~/.config/ghostty/config.ghostty     vs config.ghostty.bak
+# Prints PASS/FAIL per check; exits 1 if any check failed.
+
+typeset -g KARA="$HOME/.config/karabiner/karabiner.json"
+typeset -g KARA_BAK="$KARA.bak"
+typeset -g GCONF="$HOME/.config/ghostty/config.ghostty"
+typeset -g GCONF_BAK="$GCONF.bak"
+
+typeset -g TMPROOT
+TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/deband-smoke.XXXXXX") || exit 1
+cleanup() { rm -rf "$TMPROOT"; true }
+trap cleanup EXIT
+# INT/TERM: cleanup alone would RESUME the script — terminate explicitly.
+trap 'cleanup; exit 130' INT TERM
+
+# ---- assertions ----
+
+typeset -gi fails=0
+pass() { print -r -- "PASS: $1" }
+fail() { print -r -- "FAIL: $1"; (( ++fails )) }
+# check <desc> <want> <got>
+check() {
+  if [[ "$3" == "$2" ]]; then pass "$1"; else fail "$1 — want [$2] got [$3]"; fi
+}
+
+# ---- case 0: default tmux server snapshot (before; read-only) ----
+
+tmux ls > "$TMPROOT/tmux-before" 2>/dev/null || print -n >> "$TMPROOT/tmux-before"
+
+# ---- case 1: karabiner.json parses (HARD GATE) ----
+# A malformed karabiner.json drops ALL rules incl. right_option→Ctrl-A; if it
+# does not parse, nothing else about the file is worth asserting — abort.
+
+if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$KARA" 2>"$TMPROOT/parse-err"; then
+  pass "case 1: karabiner.json parses (python3 json.load)"
+else
+  fail "case 1: karabiner.json parses (python3 json.load) — $(<"$TMPROOT/parse-err")"
+  print -r -- "----"
+  print -r -- "deband-smoke: karabiner.json UNPARSEABLE — hard gate, aborting"
+  exit 1
+fi
+
+# ---- cases 2-5: karabiner rule surgery (structural, via python3) ----
+# case 2: the two deband rules are gone (matched by description substring)
+# case 3: exactly 3 rules remain in profile "Default profile"
+# case 4: the 3 survivors are structurally equal (json ==) to their .bak
+#         counterparts — caps_lock + DJI matched by exact description; the
+#         right_option rule has NO description, so it is matched by
+#         manipulator content (from right_option → to[0] a+left_control)
+# case 5: everything outside complex_modifications.rules unchanged vs .bak
+
+python3 - "$KARA" "$KARA_BAK" > "$TMPROOT/kara-out" <<'PYEOF'
+import copy, json, sys
+
+def ok(d):  print(f"PASS: {d}")
+def no(d):  print(f"FAIL: {d}")
+
+cur = json.load(open(sys.argv[1]))
+try:
+    bak = json.load(open(sys.argv[2]))
+except (FileNotFoundError, json.JSONDecodeError) as e:
+    no(f"case 4: karabiner.json.bak loads (needed for structural compare) — {e}")
+    sys.exit(0)
+
+def profile(doc):
+    for p in doc.get("profiles", []):
+        if p.get("name") == "Default profile":
+            return p
+    return None
+
+pc, pb = profile(cur), profile(bak)
+if pc is None:
+    no('case 2: profile "Default profile" present in karabiner.json')
+    sys.exit(0)
+ok('case 2: profile "Default profile" present in karabiner.json')
+rules  = pc.get("complex_modifications", {}).get("rules", [])
+brules = (pb or {}).get("complex_modifications", {}).get("rules", [])
+
+for needle in ("eight even columns", "Hyper + arrows → Function keys"):
+    hits = sum(needle in r.get("description", "") for r in rules)
+    if hits == 0:
+        ok(f'case 2: no rule with description containing "{needle}"')
+    else:
+        no(f'case 2: no rule with description containing "{needle}" — found {hits}')
+
+if len(rules) == 3:
+    ok('case 3: exactly 3 rules remain in "Default profile"')
+else:
+    no(f'case 3: exactly 3 rules remain in "Default profile" — got {len(rules)}')
+
+def by_desc(rs, desc):
+    m = [r for r in rs if r.get("description") == desc]
+    return m[0] if len(m) == 1 else None
+
+def by_right_option(rs):
+    m = []
+    for r in rs:
+        for man in r.get("manipulators", []):
+            to = man.get("to", [])
+            if (man.get("from", {}).get("key_code") == "right_option"
+                    and to and to[0].get("key_code") == "a"
+                    and "left_control" in to[0].get("modifiers", [])):
+                m.append(r)
+                break
+    return m[0] if len(m) == 1 else None
+
+CAPS = "Change caps_lock to command+control+option+shift."
+DJI = ("DJI Mic 2 button (volume_increment) → right_control for Wispr "
+       "(device-scoped; keyboard volume up preserved)")
+survivors = [
+    ("caps_lock→Hyper rule (by description)", by_desc(rules, CAPS), by_desc(brules, CAPS)),
+    ("DJI Mic 2 rule (by description)",       by_desc(rules, DJI),  by_desc(brules, DJI)),
+    ("right_option→Ctrl-A rule (by manipulator content)",
+        by_right_option(rules), by_right_option(brules)),
+]
+for name, c, b in survivors:
+    if c is None:
+        no(f"case 4: {name} found exactly once in karabiner.json")
+    elif b is None:
+        no(f"case 4: {name} found exactly once in karabiner.json.bak")
+    elif c == b:
+        ok(f"case 4: {name} structurally equal to .bak counterpart")
+    else:
+        no(f"case 4: {name} structurally equal to .bak counterpart")
+
+nc, nb = copy.deepcopy(cur), copy.deepcopy(bak)
+for doc in (nc, nb):
+    for p in doc.get("profiles", []):
+        cm = p.get("complex_modifications")
+        if isinstance(cm, dict):
+            cm["rules"] = None
+if nc == nb:
+    ok("case 5: everything outside complex_modifications.rules unchanged vs .bak")
+else:
+    no("case 5: everything outside complex_modifications.rules unchanged vs .bak")
+PYEOF
+typeset -i kara_rc=$?
+cat "$TMPROOT/kara-out"
+fails+=$(grep -c '^FAIL' "$TMPROOT/kara-out")
+check "cases 2-5: karabiner structural checker ran clean" "0" "$kara_rc"
+
+# ---- case 6: ghostty deband lines gone ----
+
+if grep -q 'goto_split' "$GCONF"; then
+  fail "case 6: no goto_split anywhere in config.ghostty"
+else
+  pass "case 6: no goto_split anywhere in config.ghostty"
+fi
+if grep -Eq 'shift\+f1[4-7]' "$GCONF"; then
+  fail "case 6: no shift+f14..f17 keybind lines in config.ghostty"
+else
+  pass "case 6: no shift+f14..f17 keybind lines in config.ghostty"
+fi
+
+# ---- case 7: ghostty survivor lines intact ----
+
+local -a keep_lines=(
+  'keybind = alt+arrow_left=unbind'
+  'keybind = alt+arrow_right=unbind'
+  'keybind = shift+arrow_left=unbind'
+  'keybind = shift+arrow_right=unbind'
+  'keybind = shift+enter=text:\x1b[13;2u'
+  'keybind = ctrl+enter=text:\x1b[13;5u'
+)
+local line
+for line in "${keep_lines[@]}"; do
+  if grep -qxF -- "$line" "$GCONF"; then
+    pass "case 7: [$line] still present"
+  else
+    fail "case 7: [$line] still present"
+  fi
+done
+
+# ---- case 8: diff vs .bak removes exactly the 5-line block (+≤1 blank) ----
+
+if [[ -f "$GCONF_BAK" ]]; then
+  pass "case 8: config.ghostty.bak exists"
+  diff "$GCONF_BAK" "$GCONF" > "$TMPROOT/gdiff"
+  check "case 8: diff vs .bak adds no lines" "0" "$(grep -c '^>' "$TMPROOT/gdiff")"
+  grep '^<' "$TMPROOT/gdiff" | sed -e 's/^< //' -e 's/^<$//' > "$TMPROOT/removed"
+  grep -v '^$' "$TMPROOT/removed" > "$TMPROOT/removed-nonblank"
+  cat > "$TMPROOT/expected-removed" <<'EOF'
+# Pane navigation (Hyper+arrows → Shift+F14-F17 via Karabiner)
+keybind = shift+f14=goto_split:left
+keybind = shift+f15=goto_split:right
+keybind = shift+f16=goto_split:top
+keybind = shift+f17=goto_split:bottom
+EOF
+  if diff -q "$TMPROOT/removed-nonblank" "$TMPROOT/expected-removed" >/dev/null; then
+    pass "case 8: removed lines are exactly the pane-navigation block"
+  else
+    fail "case 8: removed lines are exactly the pane-navigation block — got [$(<"$TMPROOT/removed-nonblank")]"
+  fi
+  typeset -i blanks=$(grep -c '^$' "$TMPROOT/removed")
+  if (( blanks <= 1 )); then
+    pass "case 8: at most one collapsed blank line removed (got $blanks)"
+  else
+    fail "case 8: at most one collapsed blank line removed (got $blanks)"
+  fi
+else
+  fail "case 8: config.ghostty.bak exists"
+fi
+
+# ---- case 9: ghostty parse check (best-effort — SKIP if no CLI) ----
+
+typeset -g GBIN=""
+if command -v ghostty >/dev/null 2>&1; then
+  GBIN="$(command -v ghostty)"
+elif [[ -x /Applications/Ghostty.app/Contents/MacOS/ghostty ]]; then
+  GBIN=/Applications/Ghostty.app/Contents/MacOS/ghostty
+fi
+if [[ -n "$GBIN" ]]; then
+  "$GBIN" +show-config >/dev/null 2>&1
+  check "case 9: ghostty +show-config exits 0" "0" "$?"
+else
+  print -r -- "SKIP: case 9: no ghostty CLI reachable — parse check skipped"
+fi
+
+# ---- case 10: default tmux server untouched (read-only snapshot diff) ----
+
+tmux ls > "$TMPROOT/tmux-after" 2>/dev/null || print -n >> "$TMPROOT/tmux-after"
+if diff -q "$TMPROOT/tmux-before" "$TMPROOT/tmux-after" >/dev/null; then
+  pass "case 10: default tmux server session list byte-identical before/after"
+else
+  fail "case 10: default tmux server session list byte-identical before/after"
+fi
+
+# ---- summary ----
+
+print -r -- "----"
+if (( fails > 0 )); then
+  print -r -- "deband-smoke: $fails check(s) FAILED"
+  exit 1
+fi
+print -r -- "deband-smoke: all checks passed"
