@@ -16,15 +16,19 @@ A macOS-focused development environment configuration featuring:
 
 ```
 ~
-├── .zshrc                    # Shell config with aliases, functions, history
+├── .zshenv                   # Early shell env (PATH, locale, 1Password gate)
+├── .zprofile                 # Login shell (brew shellenv, PATH)
+├── .zshrc                    # Modular loader — sources .config/zsh/*.zsh
 ├── .tmux.conf                # Terminal multiplexer (catppuccin theme)
 ├── .gitconfig                # Git configuration (templated for portability)
-├── .opencommit               # AI commit message generator
+├── .opencommit               # AI commit generator (key comes from api_keys.env)
 ├── .claude.json              # Claude Code MCP servers config
 ├── .claude/CLAUDE.md         # Claude Code instructions
+├── .local/bin/               # Authored scripts (ail, work-brief, *-smoke tests…)
 │
 └── .config/
     ├── envvars/api_keys.env  # CENTRALIZED API keys (single source of truth)
+    ├── zsh/                  # Modular shell: aliases, functions, git, docker…
     ├── starship.toml         # Cross-shell prompt (catppuccin mocha)
     ├── ghostty/config        # Terminal emulator
     ├── zellij/config.kdl     # Modern terminal multiplexer (catppuccin)
@@ -32,6 +36,10 @@ A macOS-focused development environment configuration featuring:
     ├── helix/config.toml     # Helix editor
     ├── yazi/                 # Terminal file manager (v0.4+ config)
     ├── karabiner/            # Keyboard remapping (caps lock → hyper)
+    ├── micro/                # Micro editor (settings + bindings)
+    ├── btop/                 # System monitor
+    ├── mc/                   # Midnight Commander
+    ├── opencode/             # opencode AI agent (declarative config only)
     ├── gh/                   # GitHub CLI
     ├── git/ignore            # Global gitignore
     ├── goose/config.yaml     # Goose AI assistant
@@ -85,7 +93,17 @@ export OPENAI_API_KEY="{{ promptStringOnce . "secrets.openai" "OpenAI API Key" }
 
 All secrets are **centralized** in `~/.config/envvars/api_keys.env`, sourced by `.zshrc`.
 
-Secrets are stored in a dedicated 1Password vault called `Dotfiles`:
+Secrets are stored in a dedicated 1Password vault called `Dotfiles`, in the
+**personal** account (`my.1password.com`). The account is pinned in
+`.chezmoi.toml.tmpl` so a second logged-in account (e.g. a work account) does
+not trigger "multiple accounts" errors.
+
+Some secrets are **local-only** and never enter the repo (see `.chezmoiignore`):
+infra tokens in `~/.config/zsh/secrets.zsh`, tool-written credentials (npm
+`.npmrc`, GitHub Copilot, opencode), and the Claude service-account token.
+These are recreated by logging into each tool on a new machine.
+
+Vault-backed secrets (`Dotfiles` vault):
 
 | Secret | Environment Variable | Purpose |
 |--------|---------------------|---------|
@@ -118,6 +136,10 @@ source ~/.zshrc
 
 ### Shell (zsh)
 
+- **Modular**: `.zshrc` is a thin loader that sources `~/.config/zsh/*.zsh`
+  (`aliases`, `functions`, `git`, `docker`, `agents`, …). Drop a new `*.zsh`
+  file in and it loads automatically. Secret-bearing modules stay local (see
+  Secrets Management).
 - **Smart history**: Shared across terminals, no duplicates
 - **Directory navigation**: `z` (zoxide), `..`, `...`, bookmarks (`~repos`, `~config`)
 - **Git shortcuts**: `gs`, `gp`, `gl`, `glog`, `fbr` (fuzzy branch checkout)
