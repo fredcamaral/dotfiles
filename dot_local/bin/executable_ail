@@ -111,6 +111,14 @@ _ail_main() {
   : >>"$lockfile" 2>/dev/null
   zsystem flock -f lockfd -t 10 "$lockfile" 2>/dev/null
 
+  # --repack resolved its mode BEFORE the lock: re-read it now, or a repack
+  # that waited out a concurrent manual `ail N` would repack (and re-declare)
+  # the stale mode, silently reverting the user's switch.
+  if (( quiet )); then
+    n=$(_ail_tmux show-options -v -t "=$AIL_SESSION:" @ai_mode 2>/dev/null)
+    [[ "$n" == <-> ]] && (( n >= 1 && n <= 9 )) || return 0
+  fi
+
   # Mode is declared intent, recorded even with zero agents: the spawn-side
   # auto-pack (_ai_run) reads @ai_mode before the first agent exists.
   _ail_tmux set-option -t "=$AIL_SESSION:" @ai_mode "$n"

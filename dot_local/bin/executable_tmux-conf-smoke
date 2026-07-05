@@ -116,6 +116,9 @@ pe=$(T show-hooks -gw 2>/dev/null | grep '^pane-exited')
 akp=$(T show-hooks -g 2>/dev/null | grep '^after-kill-pane')
 has "case 3b: pane-exited hook → ail --repack" 'ail --repack' "$pe"
 has "case 3b: pane-exited hook silences stdout" '>/dev/null' "$pe"
+# -b is load-bearing: a foreground run-shell blocks the tmux command queue
+# for the repack's duration (10s ceiling when waiting on ail's flock).
+has "case 3b: pane-exited hook is backgrounded (-b)" 'run-shell -b' "$pe"
 # set-hook parses its command eagerly: $HOME expands at conf-load with the
 # SERVER's environment — here the redirected TMPROOT home, on the live server
 # the real one. Asserting the redirect proves the conf bakes in no absolute
@@ -126,6 +129,7 @@ has "case 3b: pane-exited hook path is \$HOME-relative (per-server expansion)" \
 # command hook too, or explicit kills leave the deck unbalanced.
 has "case 3b: after-kill-pane hook → ail --repack" 'ail --repack' "$akp"
 has "case 3b: after-kill-pane hook silences stdout" '>/dev/null' "$akp"
+has "case 3b: after-kill-pane hook is backgrounded (-b)" 'run-shell -b' "$akp"
 
 # ---- case 4: M-p/M-o — tab-hop aliases (pre-isengard muscle memory) ----
 
