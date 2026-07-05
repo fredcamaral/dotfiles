@@ -209,6 +209,104 @@ missing=$(AI_SESSIONS_DIR="$SESS" zsh -fc \
    done' 2>&1)
 check "case 6: fresh zsh -f defines all launchers" "" "$missing"
 
+# ---- in-place flows (cases 7-9) ----
+# When the launcher runs from a shell whose pane already lives in isengard
+# (TMUX_PANE), the agent runs IN THAT PANE — no transient window, no focus
+# hop. drive_in <pane> <prefix> <marker> [post] types a script into the LIVE
+# shell of that pane (same technique as ail-smoke case 11's busy placeholder).
+
+drive_in() {
+  local pane="$1" scr="$TMPROOT/drive-in-$(( ++drives )).zsh"
+  cat > "$scr" <<EOF
+export AIL_SOCKET=${(q)SOCK} AI_SESSIONS_DIR=${(q)SESS}
+source ${(q)AI_SH}
+cd ${(q)REPO}
+_ai_run $2 zsh -c 'echo $3; sleep 600'
+${4:-}
+EOF
+  T send-keys -t "$pane" "zsh -f ${(q)scr}" Enter
+}
+pane_ready() { [[ "$(T display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null)" == zsh ]] }
+
+# ---- case 7: launcher inside a placeholder consumes THAT slot in place ----
+
+run_ail 4   # 6 agents → decks 4 + 2, tail padded with 2 placeholders
+placeholders() { T list-panes -s -t '=isengard' -f '#{@ai_placeholder}' -F '#{pane_id}' 2>/dev/null }
+wait_until 25 sh -c '[ "$(tmux -L '"$SOCK"' list-panes -s -t =isengard -f "#{@ai_placeholder}" 2>/dev/null | wc -l)" -eq 2 ]'
+slot=$(placeholders | head -n1)
+wins_before=$(T list-windows -t '=isengard' -F '#{window_id}' | count)
+wait_until 50 pane_ready "$slot"
+drive_in "$slot" cc slot-marker
+slot_is_agent() { [[ "$(T display-message -p -t "$slot" '#{@ai_agent}' 2>/dev/null)" == cc ]] }
+if wait_until 50 slot_is_agent; then
+  pass "case 7: placeholder pane became the agent in place"
+else
+  fail "case 7: placeholder never became an agent — @ai_agent [$(T display-message -p -t "$slot" '#{@ai_agent}' 2>/dev/null)]"
+fi
+check "case 7: @ai_placeholder cleared on the slot" "" \
+  "$(T display-message -p -t "$slot" '#{@ai_placeholder}' 2>/dev/null)"
+check "case 7: agent count is 7" "7" "$(agent_panes | count)"
+check "case 7: no transient window (window count unchanged)" "$wins_before" \
+  "$(T list-windows -t '=isengard' -F '#{window_id}' | count)"
+slotlog="$(T display-message -p -t "$slot" '#{@ai_log}' 2>/dev/null)"
+if wait_until 25 grep -q slot-marker "$slotlog"; then
+  pass "case 7: in-place agent output reached its log"
+else
+  fail "case 7: slot-marker never reached [$slotlog]"
+fi
+
+# ---- case 8: launcher inside a manual split stays put, immune to packing ----
+
+mwin=$(T new-window -t '=isengard:' -n manual -PF '#{window_id}' 'sleep 600')
+mpane=$(T split-window -t "$mwin" -PF '#{pane_id}')
+wait_until 50 pane_ready "$mpane"
+drive_in "$mpane" oc man-marker
+man_is_agent() { [[ "$(T display-message -p -t "$mpane" '#{@ai_agent}' 2>/dev/null)" == oc ]] }
+if wait_until 50 man_is_agent; then
+  pass "case 8: manual-split pane became the agent in place"
+else
+  fail "case 8: manual pane never became an agent"
+fi
+check "case 8: tagged @ai_manual" "1" \
+  "$(T display-message -p -t "$mpane" '#{@ai_manual}' 2>/dev/null)"
+check "case 8: manual window keeps both panes" "2" \
+  "$(T display-message -p -t "$mwin" '#{window_panes}' 2>/dev/null)"
+run_ail 4
+check "case 8: ail 4 leaves the manual agent in its window" "$mwin" \
+  "$(T display-message -p -t "$mpane" '#{window_id}' 2>/dev/null)"
+
+# ---- case 9: agent exits → slot pane reverts to a placeholder ----
+
+run_ail 4
+slot2=$(placeholders | head -n1)
+if [[ -z "$slot2" ]]; then
+  fail "case 9: no placeholder available for the revert test"
+else
+  wait_until 50 pane_ready "$slot2"
+  # quick agent exits after 1s; the trailing sleep keeps the pane alive so the
+  # post-exit state is stable to assert (no race with the shell prompt).
+  scr="$TMPROOT/drive-in-$(( ++drives )).zsh"
+  cat > "$scr" <<EOF
+export AIL_SOCKET=${(q)SOCK} AI_SESSIONS_DIR=${(q)SESS}
+source ${(q)AI_SH}
+cd ${(q)REPO}
+_ai_run cc zsh -c 'sleep 1'
+sleep 600
+EOF
+  T send-keys -t "$slot2" "zsh -f ${(q)scr}" Enter
+  slot2_reverted() {
+    [[ "$(T display-message -p -t "$slot2" '#{@ai_placeholder}' 2>/dev/null)" == 1 && \
+       -z "$(T display-message -p -t "$slot2" '#{@ai_agent}' 2>/dev/null)" ]]
+  }
+  if wait_until 50 slot2_reverted; then
+    pass "case 9: exited in-place agent reverted to a placeholder"
+  else
+    fail "case 9: slot never reverted — agent [$(T display-message -p -t "$slot2" '#{@ai_agent}' 2>/dev/null)] ph [$(T display-message -p -t "$slot2" '#{@ai_placeholder}' 2>/dev/null)]"
+  fi
+  check "case 9: reverted slot wears the · title" "·" \
+    "$(T display-message -p -t "$slot2" '#{pane_title}' 2>/dev/null)"
+fi
+
 # ---- summary ----
 
 print -r -- "----"

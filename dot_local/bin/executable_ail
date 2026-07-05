@@ -35,16 +35,21 @@ typeset -g AIL_BORDER_FMT='#{?#{==:#{@ai_agent},cc},#[fg=#ffb86c],#{?#{==:#{@ai_
 # not split unquoted expansions, and "-L ailsmoke" must be two argv words).
 _ail_tmux() { command tmux ${=AIL_SOCKET:+-L $AIL_SOCKET} "$@" }
 
-# _ail_agent_panes — "pane_id|pane_title" per agent pane, sorted by numeric
-# pane id (ids are monotonic since server start = spawn order).
+# Packable agent = @ai_agent set AND not @ai_manual. Agents opened inside a
+# user-built split carry @ai_manual (set by the launcher) — they live where
+# the user put them; ail must never pack, unzoom, or count them.
+typeset -g AIL_PACK_FILTER='#{?#{@ai_manual},0,#{@ai_agent}}'
+
+# _ail_agent_panes — "pane_id|pane_title" per packable agent pane, sorted by
+# numeric pane id (ids are monotonic since server start = spawn order).
 _ail_agent_panes() {
-  _ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_agent}' \
+  _ail_tmux list-panes -s -t "=$AIL_SESSION" -f "$AIL_PACK_FILTER" \
     -F '#{pane_id}|#{pane_title}' 2>/dev/null | sort -t'|' -k1.2,1n
 }
 
-# _ail_deck_count — distinct isengard windows currently holding agent panes.
+# _ail_deck_count — distinct isengard windows currently holding packable agents.
 _ail_deck_count() {
-  _ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_agent}' \
+  _ail_tmux list-panes -s -t "=$AIL_SESSION" -f "$AIL_PACK_FILTER" \
     -F '#{window_id}' 2>/dev/null | sort -u | wc -l | tr -d ' '
 }
 
@@ -146,7 +151,7 @@ _ail_main() {
   # zoomed, or we would zoom the unzoomed ones. Scoped to windows holding agent
   # panes: a zoomed plain-shell window is not ours to unzoom (non-agent immunity).
   local agent_wins win flag
-  agent_wins=$(_ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_agent}' -F '#{window_id}' 2>/dev/null | sort -u)
+  agent_wins=$(_ail_tmux list-panes -s -t "=$AIL_SESSION" -f "$AIL_PACK_FILTER" -F '#{window_id}' 2>/dev/null | sort -u)
   while read -r win flag; do
     [[ "$flag" == 1 ]] || continue
     grep -qxF "$win" <<< "$agent_wins" || continue
@@ -280,7 +285,7 @@ _ail_main() {
   # manual split inside a deck) still wearing its ail-given dN name — hand
   # naming back to tmux so window names stay unambiguous.
   local wname
-  agent_wins=$(_ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_agent}' -F '#{window_id}' 2>/dev/null | sort -u)
+  agent_wins=$(_ail_tmux list-panes -s -t "=$AIL_SESSION" -f "$AIL_PACK_FILTER" -F '#{window_id}' 2>/dev/null | sort -u)
   while read -r win wname; do
     [[ "$wname" == d<-> ]] || continue
     grep -qxF "$win" <<< "$agent_wins" && continue
@@ -306,7 +311,7 @@ _ail_main() {
     [[ -n "$last_agent" ]] && tail_win=$(_ail_tmux display-message -p -t "$last_agent" '#{window_id}' 2>/dev/null)
     if [[ -n "$tail_win" ]]; then
       local -i in_tail
-      in_tail=$(_ail_tmux list-panes -t "$tail_win" -f '#{@ai_agent}' -F x 2>/dev/null | wc -l | tr -d ' ')
+      in_tail=$(_ail_tmux list-panes -t "$tail_win" -f "$AIL_PACK_FILTER" -F x 2>/dev/null | wc -l | tr -d ' ')
       pad=$(( n - in_tail )); (( pad < 0 )) && pad=0
     fi
   elif (( n > 1 )); then
@@ -397,11 +402,25 @@ _ail_main() {
   done
   [[ -n "$tail_win" ]] && _ail_tmux select-layout -t "$tail_win" even-horizontal 2>/dev/null
 
-  # Restore focus, skipping if the saved pane died mid-run.
+  # Restore focus, skipping if the saved pane died mid-run. Explicit `ail N`
+  # called from a window holding no deck member (a fresh plain tab, a manual
+  # layout): jump to the desk instead — the user asked to SEE mode N, and
+  # restoring focus to a window the pack never touches reads as a no-op.
+  # --repack (quiet) never steals focus.
   if [[ -n "$saved_pane" ]] && \
      _ail_tmux list-panes -s -t "=$AIL_SESSION" -F '#{pane_id}' 2>/dev/null | grep -qxF "$saved_pane"; then
-    _ail_tmux select-window -t "$saved_pane" 2>/dev/null
-    _ail_tmux select-pane -t "$saved_pane" 2>/dev/null
+    local jump=""
+    if (( ! quiet )) && \
+       [[ -z "$(_ail_tmux list-panes -t "$saved_pane" -f "#{||:${AIL_PACK_FILTER},#{@ai_placeholder}}" -F x 2>/dev/null | head -n1)" ]]; then
+      jump=$(_ail_agent_panes | head -n1); jump="${jump%%|*}"
+      [[ -z "$jump" ]] && jump="$tail_win"
+    fi
+    if [[ -n "$jump" ]]; then
+      _ail_tmux select-window -t "$jump" 2>/dev/null
+    else
+      _ail_tmux select-window -t "$saved_pane" 2>/dev/null
+      _ail_tmux select-pane -t "$saved_pane" 2>/dev/null
+    fi
   fi
 
   # ---- feedback: in-tmux flash when a client is attached; always stdout ----

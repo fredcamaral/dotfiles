@@ -53,14 +53,18 @@ spawn_agent() {
   print -r -- "$pid"
 }
 
-# agent_windows — unique window ids currently holding agent panes.
+# Packable = @ai_agent set AND not @ai_manual (same filter ail packs on);
+# manual agents are asserted by pane id, never counted as deck members.
+typeset -g PACK_F='#{?#{@ai_manual},0,#{@ai_agent}}'
+
+# agent_windows — unique window ids currently holding packable agent panes.
 agent_windows() {
-  T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{window_id}' | sort -u
+  T list-panes -s -t '=isengard' -f "$PACK_F" -F '#{window_id}' | sort -u
 }
 
-# agent_panes_ordered — agent pane ids in spawn order (numeric pane id).
+# agent_panes_ordered — packable agent pane ids in spawn order (numeric id).
 agent_panes_ordered() {
-  T list-panes -s -t '=isengard' -f '#{@ai_agent}' -F '#{pane_id}' | sort -t'%' -k2,2n
+  T list-panes -s -t '=isengard' -f "$PACK_F" -F '#{pane_id}' | sort -t'%' -k2,2n
 }
 
 # placeholder_panes — pane ids of every @ai_placeholder pane in isengard.
@@ -379,6 +383,47 @@ check "case 17: desk window named d1 with 5 panes" "5" "$(panes_of d1)"
 run_ail 1
 check "case 17: ail 1 clears the desk (no padding by construction)" "0" \
   "$(placeholder_panes | count)"
+
+# ---- case 18: @ai_manual immunity — agents in user layouts are never packed ----
+# An agent opened inside a deliberate manual split carries @ai_manual=1
+# (set by the launcher); ail must leave it exactly where the user put it.
+
+for i in 1 2 3; do
+  spawn_agent cc "cc:re$i/b$i" >/dev/null || fail "case 18: respawn agent $i"
+done
+mwin=$(T new-window -t '=isengard:' -n manual -PF '#{window_id}' 'sleep 600')
+mpane=$(T split-window -t "$mwin" -PF '#{pane_id}' 'sleep 600')
+T set-option -p -t "$mpane" @ai_agent cc
+T set-option -p -t "$mpane" @ai_manual 1
+T select-pane -t "$mpane" -T 'cc:manual/x'
+run_ail 8
+check "case 18: manual window keeps both panes" "2" \
+  "$(T display-message -p -t "$mwin" '#{window_panes}' 2>/dev/null)"
+check "case 18: manual agent never moved" "$mwin" \
+  "$(T display-message -p -t "$mpane" '#{window_id}' 2>/dev/null)"
+check "case 18: deck packs only the 3 packable agents (sizes 8)" "8" "$(deck_sizes)"
+check "case 18: pad ignores the manual agent (5 placeholders)" "5" \
+  "$(placeholder_panes | count)"
+
+# ---- case 19: explicit ail N from a non-deck window jumps focus to the desk ----
+# Caps+8 from a fresh plain tab must SHOW the desk, not silently repack it in
+# another window (reads as a no-op). --repack (hooks) must never steal focus.
+
+plain=$(T new-window -t '=isengard:' -n plain -PF '#{pane_id}' 'sleep 600')
+T select-window -t "$plain"
+run_ail 8
+active_win=$(T display-message -p -t '=isengard:' '#{window_id}')
+check "case 19: ail 8 from plain tab lands on the deck" "$(wid_of d1)" "$active_win"
+in_deck=$(T list-panes -t "$(wid_of d1)" -f '#{@ai_agent}' -F '#{pane_id}' | head -n1)
+T select-window -t "$in_deck"; T select-pane -t "$in_deck"
+run_ail 8
+check "case 19: ail 8 from inside the deck keeps focus" "$in_deck" \
+  "$(T display-message -p -t '=isengard:' '#{pane_id}')"
+T select-window -t "$plain"
+T set-option -t '=isengard:' @ai_mode 8
+"$AIL" --repack >/dev/null 2>&1
+check "case 19: --repack never steals focus" "$plain" \
+  "$(T display-message -p -t '=isengard:' '#{pane_id}')"
 
 # ---- summary ----
 

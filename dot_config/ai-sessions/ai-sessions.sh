@@ -118,6 +118,85 @@ _ai_run() {
     cmd_quoted+="${(q)arg} "
   done
 
+  # ---- in-place: the launcher was typed inside an isengard pane ----
+  # TMUX_PANE is the pane this shell REALLY lives in (deterministic and
+  # headless-safe, unlike display-message's client focus). Three shapes:
+  #   placeholder  → the agent takes over THIS desk slot: no transient window,
+  #                  no placeholder kill, no focus hop; on exit the pane
+  #                  reverts to a placeholder and the desk reconciles.
+  #   manual split → the pane has a sibling that is neither agent nor
+  #                  placeholder — a layout the user built. The agent runs
+  #                  here tagged @ai_manual: ail never packs it; on exit the
+  #                  pane is a plain shell again.
+  #   solo window  → in-place too; auto-pack pulls the pane into the desk and
+  #                  focus follows it (the emptied window self-closes).
+  # Popups (TMUX_POPUP) and shells outside isengard keep the spawn-a-window
+  # flow below. NB: pane ids collide across servers — this only classifies
+  # correctly when TMUX and AIL_SOCKET point at the same server (true in
+  # normal use and in the smokes); on any mismatch or display failure the
+  # check degrades to the spawn flow.
+  local inplace=0 was_placeholder=0 manual=0
+  if [[ -n "$TMUX" && -z "$TMUX_POPUP" && -n "$TMUX_PANE" ]]; then
+    if [[ "$(_ai_tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" == isengard ]]; then
+      inplace=1
+      [[ "$(_ai_tmux display-message -p -t "$TMUX_PANE" '#{@ai_placeholder}' 2>/dev/null)" == 1 ]] \
+        && was_placeholder=1
+      if (( ! was_placeholder )); then
+        local plain_sib
+        plain_sib=$(_ai_tmux list-panes -t "$TMUX_PANE" \
+                      -F '#{pane_id}|#{@ai_agent}|#{@ai_placeholder}' 2>/dev/null \
+                    | awk -F'|' -v me="$TMUX_PANE" '$1 != me && $2 == "" && $3 != "1"' | head -n1)
+        [[ -n "$plain_sib" ]] && manual=1
+      fi
+    fi
+  fi
+
+  if (( inplace )); then
+    local target="$TMUX_PANE" mode rc
+    # Tag + wire logging BEFORE the agent starts — no first-byte race at all.
+    _ai_tmux set-option -p -t "$target" @ai_agent "$prefix" \; \
+      set-option -p -t "$target" @ai_log "$logfile" \; \
+      pipe-pane -o -t "$target" "cat >> ${(q)logfile}" \; \
+      select-pane -t "$target" -T "$short" \; \
+      set-option -p -t "$target" allow-set-title off 2>/dev/null
+    (( was_placeholder )) && _ai_tmux set-option -p -u -t "$target" @ai_placeholder 2>/dev/null
+    if (( manual )); then
+      _ai_tmux set-option -p -t "$target" @ai_manual 1 2>/dev/null
+    else
+      # Auto-pack: a solo pane joins the desk (focus follows the pane); a
+      # taken slot is already formed — the pack is a cheap no-op. mode 1
+      # renames the window to the pane title.
+      mode=$(_ai_tmux show-options -v -t "=isengard:" @ai_mode 2>/dev/null)
+      if [[ "$mode" == <-> ]] && (( mode >= 1 )); then
+        AIL_SOCKET="$AIL_SOCKET" "$HOME/.local/bin/ail" "$mode" >/dev/null 2>&1 || true
+      fi
+    fi
+    echo "ai-sessions: agent in pane $target → ${logfile/#$HOME/~}" >&2
+    command "$@"
+    rc=$?
+    # The pane outlives the agent: hand it back.
+    _ai_tmux pipe-pane -t "$target" 2>/dev/null
+    _ai_tmux set-option -p -u -t "$target" @ai_agent 2>/dev/null
+    _ai_tmux set-option -p -u -t "$target" @ai_log 2>/dev/null
+    if (( manual )); then
+      _ai_tmux set-option -p -u -t "$target" @ai_manual 2>/dev/null
+      _ai_tmux select-pane -t "$target" -T '' 2>/dev/null
+    else
+      # Desk slot (mode > 1): revert to a placeholder and reconcile. Under
+      # mode 1 there are no placeholders — tagging one would get this very
+      # pane KILLED by the next pack; the shell just becomes plain again.
+      mode=$(_ai_tmux show-options -v -t "=isengard:" @ai_mode 2>/dev/null)
+      if [[ "$mode" == <-> ]] && (( mode > 1 )); then
+        _ai_tmux set-option -p -t "$target" @ai_placeholder 1 2>/dev/null
+        _ai_tmux select-pane -t "$target" -T '·' 2>/dev/null
+        AIL_SOCKET="$AIL_SOCKET" "$HOME/.local/bin/ail" --repack >/dev/null 2>&1 || true
+      else
+        _ai_tmux select-pane -t "$target" -T '' 2>/dev/null
+      fi
+    fi
+    return $rc
+  fi
+
   # Spawn + tag + wire logging in a single server round-trip, so pipe-pane
   # catches the agent's output from the first byte (a second client call would
   # race the agent's first writes). The window is born under the unique
