@@ -26,7 +26,6 @@ done
 # ai-sessions (provê ai-claude, ai-opencode, etc.)
 [[ -f "$HOME/.config/ai-sessions/ai-sessions.sh" ]] && source "$HOME/.config/ai-sessions/ai-sessions.sh"
 {{ if eq .chezmoi.os "darwin" }}
-# Hermes Agent — ensure ~/.local/bin is on PATH
 export PATH="$HOME/.local/bin:$PATH"
 
 # pnpm

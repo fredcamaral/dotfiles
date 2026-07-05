@@ -1,5 +1,5 @@
 # OCO_API_KEY is set via ~/.config/envvars/api_keys.env
-OCO_MODEL=google/gemini-2.5-pro
+OCO_MODEL=google/gemini-3.1-pro-preview
 OCO_API_URL=undefined
 OCO_AI_PROVIDER=openrouter
 OCO_TOKENS_MAX_INPUT=1000000
