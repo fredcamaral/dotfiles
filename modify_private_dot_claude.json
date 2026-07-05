@@ -7,7 +7,9 @@
        to fill in once. When the live mcpServers already match the desired
        set, the file is echoed byte-for-byte so `chezmoi status` stays
        quiet. */ -}}
-{{- $current := fromJson .chezmoi.stdin -}}
+{{- /* Empty stdin = target absent (fresh machine): fromJson "" is a hard
+       EOF error, so fall back to an empty doc and build from $want. */ -}}
+{{- $current := fromJson (.chezmoi.stdin | default "{}") -}}
 {{- $cur := get $current "mcpServers" | default (dict) -}}
 {{- $argocdToken := dig "argocd-benedita" "env" "ARGOCD_API_TOKEN" "REPLACE_ME" $cur -}}
 {{- $matcherAuth := dig "matcher-sandbox" "headers" "Authorization" "Bearer REPLACE_ME" $cur -}}
