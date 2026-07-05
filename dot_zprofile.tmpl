@@ -1,0 +1,11 @@
+{{ if eq .chezmoi.os "darwin" -}}
+eval "$(/opt/homebrew/bin/brew shellenv)"
+
+# Hermes Agent — ensure ~/.local/bin is on PATH
+export PATH="$HOME/.local/bin:$PATH"
+{{- else -}}
+# ================================================================
+# .zprofile — login shells. PATH/env base ficam no .zshenv.
+# (no rivendell aqui rodava `brew shellenv`; no Debian nao precisa)
+# ================================================================
+{{- end }}

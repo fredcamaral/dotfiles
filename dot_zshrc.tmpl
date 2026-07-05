@@ -1,0 +1,41 @@
+# ================================================================
+# .zshrc — modular loader (macOS + Debian via chezmoi)
+# ================================================================
+
+# Oh My Zsh
+export ZSH="$HOME/.oh-my-zsh"
+ZSH_THEME="simple-fred"
+plugins=(git)
+{{ if eq .chezmoi.os "linux" -}}
+# compdump no cache XDG (evita sujar o $HOME com .zcompdump-*); omz roda o compinit.
+export ZSH_COMPDUMP="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump-${ZSH_VERSION}"
+[[ -d "${ZSH_COMPDUMP:h}" ]] || mkdir -p "${ZSH_COMPDUMP:h}"
+{{ end -}}
+source "$ZSH/oh-my-zsh.sh"
+
+# Modulos de config
+for f in "$HOME/.config/zsh"/*.zsh; do
+  [[ -f "$f" ]] && source "$f"
+done
+{{ if eq .chezmoi.os "linux" }}
+# Plugins (pacotes do apt)
+[[ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+# syntax-highlighting deve ser dos ultimos a carregar
+[[ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+{{ end }}
+# ai-sessions (provê ai-claude, ai-opencode, etc.)
+[[ -f "$HOME/.config/ai-sessions/ai-sessions.sh" ]] && source "$HOME/.config/ai-sessions/ai-sessions.sh"
+{{ if eq .chezmoi.os "darwin" }}
+# Hermes Agent — ensure ~/.local/bin is on PATH
+export PATH="$HOME/.local/bin:$PATH"
+
+# pnpm
+export PNPM_HOME="/Users/fredamaral/Library/pnpm"
+case ":$PATH:" in
+  *":$PNPM_HOME/bin:"*) ;;
+  *) export PATH="$PNPM_HOME/bin:$PATH" ;;
+esac
+# pnpm end
+{{- else if eq .chezmoi.os "linux" }}
+. "$HOME/.local/share/../bin/env"
+{{- end }}

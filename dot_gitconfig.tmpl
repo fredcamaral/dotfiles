@@ -1,7 +1,7 @@
 [init]
 	defaultBranch = main
 [user]
-	name = {{ .chezmoi.username | title }} Amaral
+	name = {{ .name }}
 	email = {{ .email | default "fred@fredamaral.com.br" }}
 {{- if .gpg_signing_key }}
 	signingkey = {{ .gpg_signing_key }}
@@ -19,12 +19,25 @@
 	gpgSign = false
 {{- end }}
 [core]
-	editor = nvim
+	editor = {{ if eq .chezmoi.os "darwin" }}nvim{{ else }}micro{{ end }}
 	pager = less
 [pull]
 	rebase = true
 [push]
 	autoSetupRemote = true
+{{- if eq .chezmoi.os "linux" }}
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential
+[filter "lfs"]
+	required = true
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+{{- end }}
 [alias]
 	st = status
 	co = checkout
