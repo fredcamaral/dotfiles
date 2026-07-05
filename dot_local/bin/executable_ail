@@ -11,6 +11,9 @@
 #   ail N         re-pack into decks of N (N in 1..9); N==1 = one named tab per agent
 #   ail --repack  re-run the declared @ai_mode (pane-exited hook target);
 #                 silent no-op when no session or no mode is declared
+#   ail --desk    birth a new empty desk of N placeholders (N = declared
+#                 mode); converts the current window when it is a lone idle
+#                 shell, else creates a fresh window
 #
 # Fixed grid (Phase F): after packing, the LAST deck is padded to N with
 # placeholder panes — plain shells tagged with the @ai_placeholder pane option,
@@ -18,6 +21,12 @@
 # padding by construction; zero agents + N>1 yields one desk of N placeholders.
 # Idle placeholders (foreground command is the shell) are killable; a busy one
 # is promoted to its own plain window instead — never killed.
+#
+# Extra desks: a window made ENTIRELY of placeholders is a desk in its own
+# right (born from `ail --desk`) — preserved across packs, kept at exactly N
+# panes, named after the agent decks (d2, d3…). Packing stays dense-left: an
+# agent born in an extra-desk slot is pulled into earlier free slots first,
+# so extra desks matter when the main deck is full. Mode 1 clears them all.
 #
 # Self-contained on purpose: tmux run-shell binds call it by absolute path and
 # the tmux server's inherited PATH may lack ~/.local/bin — no zshrc, no
@@ -63,6 +72,53 @@ _ail_deck_borders() {
   _ail_tmux set-option -w -t "$1" pane-border-format "$AIL_BORDER_FMT" 2>/dev/null
 }
 
+# _ail_fill_desk <window> <pad> <shell_base> — hold <window> at exactly <pad>
+# placeholders: keep busy ones first (never sacrifice user state for an idle
+# shell), promote busy extras to their own plain window, kill idle extras,
+# spawn the shortfall off the window's LAST pane (placeholders trail right),
+# re-layout. SPAWN before KILL: kills fire pane-exited → concurrent repacks
+# must observe an already-padded desk so they never double-fill.
+_ail_fill_desk() {
+  local win="$1" sbase="$3"
+  local -i pad="$2" kept=0 need=0 k
+  local ph pid pcmd wpanes tail_pane w
+  local -a keep_busy keep_idle kills promotes
+  while IFS= read -r ph; do
+    [[ -z "$ph" ]] && continue
+    pid="${ph%%|*}"; pcmd="${ph#*|}"
+    if [[ "$pcmd" == "$sbase" ]]; then keep_idle+=("$pid"); else keep_busy+=("$pid"); fi
+  done < <(_ail_tmux list-panes -t "$win" -f '#{@ai_placeholder}' -F '#{pane_id}|#{pane_current_command}' 2>/dev/null)
+  for pid in "${keep_busy[@]}"; do
+    if (( kept < pad )); then (( ++kept )); else promotes+=("$pid"); fi
+  done
+  for pid in "${keep_idle[@]}"; do
+    if (( kept < pad )); then (( ++kept )); else kills+=("$pid"); fi
+  done
+  need=$(( pad - kept ))
+  for (( k = 0; k < need; k++ )); do
+    tail_pane=$(_ail_tmux list-panes -t "$win" -F '#{pane_id}' 2>/dev/null | tail -n1)
+    [[ -z "$tail_pane" ]] && tail_pane="$win"
+    pid=$(_ail_tmux split-window -d -h -t "$tail_pane" -c "$HOME" -PF '#{pane_id}' 2>/dev/null) || continue
+    [[ -z "$pid" ]] && continue
+    _ail_tmux set-option -p -t "$pid" @ai_placeholder 1 2>/dev/null
+    _ail_tmux select-pane -t "$pid" -T '·' 2>/dev/null
+    # Re-layout after every split: split-window halves one pane — repeated
+    # splits starve width long before even-horizontal would.
+    _ail_tmux select-layout -t "$win" even-horizontal 2>/dev/null
+  done
+  for pid in "${promotes[@]}"; do
+    _ail_tmux set-option -p -u -t "$pid" @ai_placeholder 2>/dev/null
+    wpanes=$(_ail_tmux display-message -p -t "$pid" '#{window_panes}' 2>/dev/null)
+    (( ${wpanes:-1} > 1 )) && _ail_tmux break-pane -d -s "$pid" -t "=$AIL_SESSION:" 2>/dev/null
+    w=$(_ail_tmux display-message -p -t "$pid" '#{window_id}' 2>/dev/null)
+    [[ -n "$w" ]] && _ail_tmux set-option -w -t "$w" automatic-rename on 2>/dev/null
+  done
+  for pid in "${kills[@]}"; do
+    _ail_tmux kill-pane -t "$pid" 2>/dev/null
+  done
+  _ail_tmux select-layout -t "$win" even-horizontal 2>/dev/null
+}
+
 _ail_main() {
   local n="${1:-}"
   local -i quiet=0
@@ -99,8 +155,21 @@ _ail_main() {
     return 0
   fi
 
+  # --desk: birth a new empty desk (N = the declared mode). The seed pane is
+  # tagged after the lock below; the reconciliation recognizes the resulting
+  # pure-placeholder window as a desk and pads it to N.
+  local -i want_desk=0
+  if [[ "$n" == "--desk" ]]; then
+    want_desk=1
+    n=$(_ail_tmux show-options -v -t "=$AIL_SESSION:" @ai_mode 2>/dev/null)
+    if [[ "$n" != <-> ]] || (( n < 2 || n > 9 )); then
+      echo "ail: --desk needs a declared mode > 1 (run ail N first)" >&2
+      return 1
+    fi
+  fi
+
   if [[ "$n" != <-> ]] || (( n < 1 || n > 9 )); then
-    echo "usage: ail [N]   (N in 1..9)" >&2
+    echo "usage: ail [N|--repack|--desk]   (N in 1..9)" >&2
     return 1
   fi
 
@@ -127,6 +196,44 @@ _ail_main() {
   # Mode is declared intent, recorded even with zero agents: the spawn-side
   # auto-pack (_ai_run) reads @ai_mode before the first agent exists.
   _ail_tmux set-option -t "=$AIL_SESSION:" @ai_mode "$n"
+
+  # Idle test base: a pane whose foreground command is still the shell.
+  local shell_base
+  shell_base=$(_ail_tmux show-options -gv default-shell 2>/dev/null)
+  shell_base="${shell_base:t}"
+  [[ -z "$shell_base" ]] && shell_base=zsh
+
+  # --desk seed: convert the active window when it is a lone idle plain
+  # shell (the "new tab, give me a desk here" gesture); otherwise create a
+  # fresh window. One tagged placeholder is enough — the fill pads it to N.
+  local desk_win=""
+  if (( want_desk )); then
+    local cur curinfo
+    cur=$(_ail_tmux display-message -p -t "=$AIL_SESSION:" '#{pane_id}' 2>/dev/null)
+    [[ -n "$cur" ]] && curinfo=$(_ail_tmux display-message -p -t "$cur" \
+      '#{window_id}|#{window_panes}|#{pane_current_command}|#{@ai_agent}|#{@ai_placeholder}|#{@ai_manual}' 2>/dev/null)
+    if [[ -n "$curinfo" ]]; then
+      local -a cf
+      cf=("${(@s:|:)curinfo}")
+      if [[ "${cf[2]}" == 1 && "${cf[3]}" == "$shell_base" && -z "${cf[4]}" && -z "${cf[5]}" && -z "${cf[6]}" ]]; then
+        _ail_tmux set-option -p -t "$cur" @ai_placeholder 1 2>/dev/null
+        _ail_tmux select-pane -t "$cur" -T '·' 2>/dev/null
+        desk_win="${cf[1]}"
+      fi
+    fi
+    if [[ -z "$desk_win" ]]; then
+      curinfo=$(_ail_tmux new-window -d -t "=$AIL_SESSION:" -c "$HOME" -PF '#{pane_id}|#{window_id}' 2>/dev/null)
+      if [[ -n "$curinfo" ]]; then
+        _ail_tmux set-option -p -t "${curinfo%%|*}" @ai_placeholder 1 2>/dev/null
+        _ail_tmux select-pane -t "${curinfo%%|*}" -T '·' 2>/dev/null
+        desk_win="${curinfo#*|}"
+      fi
+    fi
+    # @ai_desk marks INTENT: a mode switch drains old tail decks into
+    # pure-placeholder windows too, and those must stay strays (killed) —
+    # only windows the user asked for survive as desks.
+    [[ -n "$desk_win" ]] && _ail_tmux set-option -w -t "$desk_win" @ai_desk 1 2>/dev/null
+  fi
 
   # ---- collect agent panes in spawn order ----
   local -a ids titles
@@ -289,20 +396,23 @@ _ail_main() {
   while read -r win wname; do
     [[ "$wname" == d<-> ]] || continue
     grep -qxF "$win" <<< "$agent_wins" && continue
+    # An @ai_desk pure-placeholder window is a desk (ail --desk) — it keeps
+    # its name; drained decks without the mark hand naming back as before.
+    if [[ "$(_ail_tmux show-options -wv -t "$win" @ai_desk 2>/dev/null)" == 1 ]] && \
+       ! _ail_tmux list-panes -t "$win" -F '#{@ai_placeholder}' 2>/dev/null | grep -qv '^1$'; then
+      continue
+    fi
     _ail_tmux set-option -w -t "$win" automatic-rename on 2>/dev/null
   done < <(_ail_tmux list-windows -t "=$AIL_SESSION" -F '#{window_id} #{window_name}' 2>/dev/null)
 
-  # ---- placeholder reconciliation (fixed grid) ----
-  # Contract: the LAST deck is padded to N with placeholders; none survive
-  # anywhere else. Hook-safety ordering: SPAWN missing placeholders first,
-  # THEN promote, THEN kill — kills fire pane-exited → concurrent `ail
-  # --repack`s, which must observe an already-padded tail so they never
-  # double-fill. Killing an already-dead pane is a harmless no-op.
-  local tail_win="" shell_base
+  # ---- placeholder reconciliation (fixed grid, multi-desk) ----
+  # Desk windows: the tail deck (padded to N) plus every pure-placeholder
+  # window — an "extra desk" (ail --desk), kept at exactly N panes.
+  # Placeholders anywhere else are strays: killed when idle, promoted when
+  # busy. All desk fills run BEFORE any stray kill (hook-safety: kills fire
+  # pane-exited → concurrent repacks must observe already-padded desks).
+  local tail_win=""
   local -i pad=0
-  shell_base=$(_ail_tmux show-options -gv default-shell 2>/dev/null)
-  shell_base="${shell_base:t}"
-  [[ -z "$shell_base" ]] && shell_base=zsh
 
   if (( n > 1 && total > 0 )); then
     local last_agent
@@ -339,55 +449,57 @@ _ail_main() {
     fi
   fi
 
-  # Partition: keep up to pad placeholders already in the tail deck (busy
-  # first — never sacrifice user state to save an idle shell); everything
-  # else is killable when idle, promoted when busy. Idle = the pane's
-  # foreground command is still the shell. Ceiling: a nested zsh or a zsh
-  # SCRIPT running inside a placeholder also reports the shell as the
-  # foreground command and reads as idle — killable. If that ever bites,
-  # weigh window_activity recency alongside pane_current_command.
+  # Extra desks: pure-placeholder windows carrying @ai_desk (user intent —
+  # `ail --desk`), other than the tail. Pure-placeholder windows WITHOUT the
+  # mark are repack residue (a drained tail deck) and stay strays. Mode 1
+  # keeps the list empty — there every placeholder is a stray ("ail 1 clears
+  # the desk"). Idle = the pane's foreground command is still the shell.
+  # Ceiling: a nested zsh or a zsh SCRIPT inside a placeholder also reports
+  # the shell and reads as idle — killable. If that ever bites, weigh
+  # window_activity recency alongside pane_current_command.
+  local -a extra_desks
+  extra_desks=()
+  if (( n > 1 )); then
+    while IFS= read -r win; do
+      [[ "$win" == "$tail_win" ]] && continue
+      [[ "$(_ail_tmux show-options -wv -t "$win" @ai_desk 2>/dev/null)" == 1 ]] || continue
+      _ail_tmux list-panes -t "$win" -F '#{@ai_placeholder}' 2>/dev/null | grep -qv '^1$' && continue
+      extra_desks+=("$win")
+    done < <(_ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_placeholder}' -F '#{window_id}' 2>/dev/null | sort -u)
+  fi
+
+  # Fill every desk (spawns happen in here, before any stray kill below).
+  [[ -n "$tail_win" ]] && _ail_fill_desk "$tail_win" "$pad" "$shell_base"
+  for win in "${extra_desks[@]}"; do
+    _ail_fill_desk "$win" "$n" "$shell_base"
+  done
+
+  # Name extra desks after the agent decks, in window order; desk borders on.
+  if (( ${#extra_desks} )); then
+    local -i dnum=$(( total > 0 ? decks : 1 ))
+    while IFS= read -r win; do
+      (( ${extra_desks[(Ie)$win]} )) || continue
+      (( ++dnum ))
+      _ail_tmux rename-window -t "$win" "d$dnum" 2>/dev/null
+      _ail_deck_borders "$win"
+    done < <(_ail_tmux list-windows -t "=$AIL_SESSION" -F '#{window_id}' 2>/dev/null)
+  fi
+
+  # Strays: placeholders living outside every desk window — read AFTER the
+  # fills so freshly spawned desk panes are never misread as strays.
   local ph rest pcmd pwin
-  local -a keep_busy keep_idle kills promotes
-  local -i kept=0
+  local -a kills promotes
   while IFS= read -r ph; do
     [[ -z "$ph" ]] && continue
     pid="${ph%%|*}"; rest="${ph#*|}"
     pwin="${rest%%|*}"; pcmd="${rest#*|}"
-    if [[ -n "$tail_win" && "$pwin" == "$tail_win" ]]; then
-      if [[ "$pcmd" == "$shell_base" ]]; then keep_idle+=("$pid"); else keep_busy+=("$pid"); fi
-    elif [[ "$pcmd" == "$shell_base" ]]; then
-      kills+=("$pid")
-    else
-      promotes+=("$pid")
-    fi
+    [[ -n "$tail_win" && "$pwin" == "$tail_win" ]] && continue
+    (( ${extra_desks[(Ie)$pwin]} )) && continue
+    if [[ "$pcmd" == "$shell_base" ]]; then kills+=("$pid"); else promotes+=("$pid"); fi
   done < <(_ail_tmux list-panes -s -t "=$AIL_SESSION" -f '#{@ai_placeholder}' -F '#{pane_id}|#{window_id}|#{pane_current_command}' 2>/dev/null)
-  for pid in "${keep_busy[@]}"; do
-    if (( kept < pad )); then (( ++kept )); else promotes+=("$pid"); fi
-  done
-  for pid in "${keep_idle[@]}"; do
-    if (( kept < pad )); then (( ++kept )); else kills+=("$pid"); fi
-  done
 
-  # Spawn the missing placeholders (before any kill — see ordering note).
-  # Split off the LAST pane of the window, not the window itself: a bare
-  # window target splits the ACTIVE pane, dropping placeholders into the
-  # middle of the deck — they belong after the agents, on the right.
-  local -i need=$(( pad - kept ))
-  local tail_pane
-  for (( k = 0; k < need; k++ )); do
-    tail_pane=$(_ail_tmux list-panes -t "$tail_win" -F '#{pane_id}' 2>/dev/null | tail -n1)
-    [[ -z "$tail_pane" ]] && tail_pane="$tail_win"
-    pid=$(_ail_tmux split-window -d -h -t "$tail_pane" -c "$HOME" -PF '#{pane_id}' 2>/dev/null) || continue
-    [[ -z "$pid" ]] && continue
-    _ail_tmux set-option -p -t "$pid" @ai_placeholder 1 2>/dev/null
-    _ail_tmux select-pane -t "$pid" -T '·' 2>/dev/null
-    # Re-layout after every split: split-window halves one pane — repeated
-    # splits starve width long before even-horizontal would.
-    _ail_tmux select-layout -t "$tail_win" even-horizontal 2>/dev/null
-  done
-
-  # Promote busy placeholders: a shell the user started something in becomes
-  # a plain window — untouchable, like any manual window.
+  # Promote busy strays: a shell the user started something in becomes a
+  # plain window — untouchable, like any manual window. Kill idle ones.
   for pid in "${promotes[@]}"; do
     _ail_tmux set-option -p -u -t "$pid" @ai_placeholder 2>/dev/null
     wpanes=$(_ail_tmux display-message -p -t "$pid" '#{window_panes}' 2>/dev/null)
@@ -395,12 +507,9 @@ _ail_main() {
     win=$(_ail_tmux display-message -p -t "$pid" '#{window_id}' 2>/dev/null)
     [[ -n "$win" ]] && _ail_tmux set-option -w -t "$win" automatic-rename on 2>/dev/null
   done
-
-  # Kill idle extras LAST (see ordering note), then even out the tail.
   for pid in "${kills[@]}"; do
     _ail_tmux kill-pane -t "$pid" 2>/dev/null
   done
-  [[ -n "$tail_win" ]] && _ail_tmux select-layout -t "$tail_win" even-horizontal 2>/dev/null
 
   # Restore focus, skipping if the saved pane died mid-run. Explicit `ail N`
   # called from a window holding no deck member (a fresh plain tab, a manual
@@ -422,6 +531,9 @@ _ail_main() {
       _ail_tmux select-pane -t "$saved_pane" 2>/dev/null
     fi
   fi
+
+  # --desk: land on the new desk — the gesture IS "give me a desk here".
+  [[ -n "$desk_win" ]] && _ail_tmux select-window -t "$desk_win" 2>/dev/null
 
   # ---- feedback: in-tmux flash when a client is attached; always stdout ----
   # --repack is quiet by contract: it runs on EVERY pane death — a flash (or

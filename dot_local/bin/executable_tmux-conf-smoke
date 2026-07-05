@@ -130,6 +130,9 @@ has "case 3b: pane-exited hook path is \$HOME-relative (per-server expansion)" \
 has "case 3b: after-kill-pane hook → ail --repack" 'ail --repack' "$akp"
 has "case 3b: after-kill-pane hook silences stdout" '>/dev/null' "$akp"
 has "case 3b: after-kill-pane hook is backgrounded (-b)" 'run-shell -b' "$akp"
+md="$(key_cmd M-d)"
+has "case 3b: M-d → run-shell ail --desk" 'ail --desk' "$md"
+has "case 3b: M-d silences stdout" '>/dev/null' "$md"
 
 # ---- case 4: M-p/M-o — tab-hop aliases (pre-isengard muscle memory) ----
 

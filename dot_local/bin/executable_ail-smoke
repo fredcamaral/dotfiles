@@ -425,6 +425,62 @@ T set-option -t '=isengard:' @ai_mode 8
 check "case 19: --repack never steals focus" "$plain" \
   "$(T display-message -p -t '=isengard:' '#{pane_id}')"
 
+# ---- case 20: ail --desk converts an idle solo shell tab into a new desk ----
+# A pure-placeholder window is a desk in its own right: preserved by packs,
+# kept at exactly N panes, named after the agent decks.
+
+# zsh -f: rc-less shell → pane_current_command is a STABLE "zsh" (a real
+# interactive zsh flickers to rc children under load and the conversion
+# check races); the conversion contract only reads the basename anyway.
+conv=$(T new-window -t '=isengard:' -n conv -PF '#{pane_id}' 'zsh -f')
+conv_win=$(T display-message -p -t "$conv" '#{window_id}')
+wait_until 50 sh -c "[ \"\$(tmux -L $SOCK display-message -p -t $conv '#{pane_current_command}')\" = zsh ]"
+T select-window -t "$conv"
+"$AIL" --desk >/dev/null 2>&1 || fail "case 20: ail --desk exited non-zero"
+check "case 20: same window converted (no new window)" "$conv_win" \
+  "$(T display-message -p -t "$conv" '#{window_id}' 2>/dev/null)"
+check "case 20: desk has 8 panes" "8" \
+  "$(T display-message -p -t "$conv_win" '#{window_panes}' 2>/dev/null)"
+check "case 20: all 8 are placeholders" "8" \
+  "$(T list-panes -t "$conv_win" -f '#{@ai_placeholder}' -F x | count)"
+check "case 20: desk named d2 (after the agent deck)" "d2" \
+  "$(T display-message -p -t "$conv_win" '#{window_name}' 2>/dev/null)"
+check "case 20: window carries @ai_desk (intent mark)" "1" \
+  "$(T show-options -wv -t "$conv_win" @ai_desk 2>/dev/null)"
+check "case 20: 13 placeholders total (5 in d1 + 8 in d2)" "13" \
+  "$(placeholder_panes | count)"
+
+# ---- case 21: extra desks survive packs and self-repair to N ----
+
+snap_desk=$(T list-panes -t "$conv_win" -F '#{pane_id}')
+run_ail 8
+check "case 21: ail 8 preserves the extra desk (same pane ids)" "$snap_desk" \
+  "$(T list-panes -t "$conv_win" -F '#{pane_id}' 2>/dev/null)"
+T kill-pane -t "$(T list-panes -t "$conv_win" -F '#{pane_id}' | tail -n1)"
+run_ail 8
+check "case 21: killed desk pane refilled to 8" "8" \
+  "$(T display-message -p -t "$conv_win" '#{window_panes}' 2>/dev/null)"
+
+# ---- case 22: agent born in an extra-desk slot obeys dense-left packing ----
+# d1 has free slots (3 agents / mode 8), so the new agent is pulled into d1
+# and the extra desk refills to 8 placeholders.
+
+slot20=$(T list-panes -t "$conv_win" -F '#{pane_id}' | head -n1)
+T set-option -p -u -t "$slot20" @ai_placeholder
+T set-option -p -t "$slot20" @ai_agent cc
+T select-pane -t "$slot20" -T 'cc:desk/x'
+run_ail 8
+check "case 22: 4th agent joined d1 (dense-left)" "4" \
+  "$(T list-panes -t "$(wid_of d1)" -f '#{@ai_agent}' -F x | count)"
+check "case 22: extra desk back to 8 pure placeholders" "8" \
+  "$(T list-panes -t "$conv_win" -f '#{@ai_placeholder}' -F x | count)"
+
+# ---- case 23: mode 1 clears extra desks too ----
+
+run_ail 1
+check "case 23: ail 1 clears every placeholder (desks included)" "0" \
+  "$(placeholder_panes | count)"
+
 # ---- summary ----
 
 print -r -- "----"
