@@ -8,6 +8,9 @@
 #   empty on GitHub                  -> skip
 #   archived on GitHub               -> ignored entirely (lives in .archive/)
 #
+# Also refreshes ../fredcamaral/<repo> clones that already exist and whose
+# directory name is a repo of that account; never clones them.
+#
 # --pull: additionally fast-forward repos that are clean AND on the default
 #   branch (git pull --ff-only). Dirty or non-default-branch repos stay
 #   PROTECTED (fetch only). Never switches branches.
@@ -21,8 +24,8 @@ ORG="lerianstudio"
 JOBS=8
 FETCH_ONLY=1
 [ "${1:-}" = "--pull" ] && FETCH_ONLY=0
-LOG="$(mktemp -t lerianstudio-sync)"
-TSV="$(mktemp -t lerianstudio-repos)"
+LOG="$(mktemp "${TMPDIR:-/tmp}/lerianstudio-sync.XXXXXX")"
+TSV="$(mktemp "${TMPDIR:-/tmp}/lerianstudio-repos.XXXXXX")"
 trap 'rm -f "$TSV"' EXIT
 
 sync_one() {
@@ -84,13 +87,25 @@ if [ ! -s "$TSV" ]; then
   echo "FATAL: repo list is empty — aborting (check org name '$ORG' and 'gh' auth)" >&2
   exit 1
 fi
-echo "$(wc -l <"$TSV" | tr -d ' ') repos, syncing with $JOBS workers..."
+echo "$(wc -l <"$TSV" | tr -d ' ') $ORG repos + existing fredcamaral clones, syncing with $JOBS workers..."
 
 while IFS=$'\t' read -r name default; do
   [ -z "$name" ] && continue
   while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do sleep 0.2; done
   sync_one "$name" "$default" &
 done <"$TSV"
+
+PERSONAL="${BASE%/*}/fredcamaral"
+if gh repo list fredcamaral --limit 1000 --json name,defaultBranchRef \
+  --jq '.[] | "\(.name)\t\(.defaultBranchRef.name // "")"' >"$TSV"; then
+  while IFS=$'\t' read -r name default; do
+    [ -d "$PERSONAL/$name" ] || continue
+    while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do sleep 0.2; done
+    BASE="${PERSONAL%/*}" sync_one "fredcamaral/$name" "$default" &
+  done <"$TSV"
+else
+  echo "FAIL       fredcamaral :: repo list failed" >>"$LOG"
+fi
 wait
 
 echo
